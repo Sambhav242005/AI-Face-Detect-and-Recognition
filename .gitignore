@@ -1,0 +1,6 @@
+__pycache__/
+.gradio/
+debug_failed_faces/
+face_data_db/
+saved_faces/
+venv/

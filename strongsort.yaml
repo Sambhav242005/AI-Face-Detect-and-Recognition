@@ -1,0 +1,14 @@
+# Ultralytics StrongSORT tracker configuration file
+
+tracker_type: strongsort  # 'strongsort' or 'strongsort_ocsort'
+obj_score_thres: 0.5  # object confidence score threshold
+match_threshold: 0.7  # matching threshold
+max_age: 30
+n_init: 3
+nn_budget: 100
+
+# ReID (person embedding) model config
+model:
+  type: osnet_x0_25  # options: 'osnet_x0_25', 'osnet_x1_0', 'mobilenetv2_x1_4'
+  model_path: ''  # leave empty for auto download
+  use_cuda: True  # use GPU if available
