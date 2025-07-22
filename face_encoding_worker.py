@@ -20,6 +20,7 @@ def face_encoding_worker(face_crop):
         List of face encoding values or None if encoding fails
     """
     try:
+        print("face crop encoding worker")
         if face_crop is None or face_crop.size == 0:
             logger.warning("Empty or invalid face crop")
             return None
