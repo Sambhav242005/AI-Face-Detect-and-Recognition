@@ -1,6 +1,3 @@
-import os
-import sys
-import traceback
 import cv2
 import time
 import numpy as np
@@ -8,30 +5,32 @@ from ultralytics import YOLO
 import chromadb
 import threading
 import queue
+import multiprocessing as mp
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 import logging
 import torch
+import warnings
+import os
 
-# --- PyQt6 Imports ---
-from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QLabel, QPushButton,
-    QVBoxLayout, QHBoxLayout, QGridLayout, QLineEdit, QScrollArea
-)
-from PyQt6.QtGui import QPixmap, QImage, QFont
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, pyqtSlot
+# Import with error handling - use threading instead of multiprocessing to avoid pickle issues
+try:
+    import face_encoding_worker
+    FACE_ENCODING_AVAILABLE = True
+except ImportError:
+    print("Warning: face_encoding_worker module not found. Please ensure it exists.")
+    face_encoding_worker = None
+    FACE_ENCODING_AVAILABLE = False
 
-# --- Local Imports ---
-# Make sure these files are in the same directory.
-from db import DatabaseManager
-from face_encoding_worker import face_encoding_worker
+# Suppress some warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
 
-# --- Configuration ---
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Configure logging
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- Data Classes ---
 @dataclass
 class FaceDetection:
     """Data class for face detection results"""
@@ -44,443 +43,629 @@ class FaceDetection:
     face_crop: np.ndarray
     frame_timestamp: float
 
-# --- Main System Class ---
+@dataclass
+class FaceEmbedding:
+    """Data class for face embeddings"""
+    track_id: int
+    embedding: List[float]
+    reid_num: Optional[int] = None
+    name: Optional[str] = None
+
+class DatabaseManager:
+    """Thread-safe database operations"""
+    
+    def __init__(self, db_path="./face_data_db"):
+        self.db_path = db_path
+        self.client = None
+        self.face_db = None
+        self.reid_name_map = {}
+        self.lock = threading.Lock()
+        self._initialize_db()
+    
+    def _initialize_db(self):
+        """Initialize database with error handling"""
+        try:
+            # Create directory if it doesn't exist
+            os.makedirs(self.db_path, exist_ok=True)
+            
+            self.client = chromadb.PersistentClient(path=self.db_path)
+            self.face_db = self.client.get_or_create_collection("face_db")
+            self._load_existing_data()
+            logger.info("Database initialized successfully")
+        except Exception as e:
+            logger.error(f"Database initialization failed: {e}")
+            # Create a fallback in-memory database
+            try:
+                self.client = chromadb.Client()
+                self.face_db = self.client.create_collection("face_db")
+                logger.info("Using in-memory database as fallback")
+            except Exception as e2:
+                logger.error(f"Fallback database creation failed: {e2}")
+                self.face_db = None
+    
+    def _load_existing_data(self):
+        """Load existing ReID data from database"""
+        if not self.face_db:
+            return
+        
+        try:
+            all_faces = self.face_db.get(include=["metadatas"])
+            ids = all_faces.get("ids", [])
+            metadatas = all_faces.get("metadatas", [])
+            
+            for i, reid_key in enumerate(ids):
+                if i < len(metadatas) and metadatas[i]:
+                    name = metadatas[i].get("name", "unknown")
+                    self.reid_name_map[reid_key] = name
+            
+            logger.info(f"Loaded {len(ids)} existing face records")
+        except Exception as e:
+            logger.error(f"Error loading existing data: {e}")
+    
+    def query_face(self, embedding: List[float], threshold: float = 0.4) -> Tuple[Optional[int], Optional[str]]:
+        """Query database for face match"""
+        if not self.face_db:
+            return None, None
+            
+        with self.lock:
+            try:
+                qr = self.face_db.query(
+                    query_embeddings=[embedding],
+                    n_results=1
+                )
+                match_ids = qr.get("ids", [[]])[0]
+                match_dists = qr.get("distances", [[]])[0]
+                
+                if match_ids and match_dists and len(match_dists) > 0 and match_dists[0] < threshold:
+                    matched_key = match_ids[0]
+                    # Better parsing of reid number
+                    try:
+                        matched_num = int(matched_key.split("_")[1])
+                        name = self.reid_name_map.get(matched_key, f"unknown_{matched_num}")
+                        return matched_num, name
+                    except (IndexError, ValueError) as e:
+                        logger.error(f"Error parsing reid key {matched_key}: {e}")
+                        return None, None
+                
+                return None, None
+            except Exception as e:
+                logger.error(f"Error querying face: {e}")
+                return None, None
+    
+    def add_face(self, embedding: List[float], reid_num: int, name: str) -> bool:
+        """Add new face to database"""
+        if not self.face_db:
+            return False
+            
+        with self.lock:
+            try:
+                key = f"reid_{reid_num}"
+                self.face_db.add(
+                    ids=[key],
+                    embeddings=[embedding],
+                    metadatas=[{"name": name}]
+                )
+                self.reid_name_map[key] = name
+                return True
+            except Exception as e:
+                logger.error(f"Error adding face: {e}")
+                return False
+    
+    def update_name(self, reid_key: str, new_name: str) -> bool:
+        """Update face name in database"""
+        if not self.face_db:
+            return False
+            
+        with self.lock:
+            try:
+                self.face_db.update(ids=[reid_key], metadatas=[{"name": new_name}])
+                self.reid_name_map[reid_key] = new_name
+                return True
+            except Exception as e:
+                logger.error(f"Error updating name: {e}")
+                return False
+    
+    def get_next_reid_num(self) -> int:
+        """Get next available ReID number"""
+        with self.lock:
+            try:
+                existing_nums = []
+                for k in self.reid_name_map.keys():
+                    try:
+                        num = int(k.split("_")[1])
+                        existing_nums.append(num)
+                    except (IndexError, ValueError):
+                        continue
+                return max(existing_nums + [0]) + 1
+            except Exception as e:
+                logger.error(f"Error getting next reid num: {e}")
+                return 1
+
+
 class FaceRecognitionSystem:
-    """Optimized face recognition system with robust processing pipelines."""
-
-    def __init__(self, model_path='model/yolov11l-face.pt', target_width=1280, target_height=720):
-        self.target_width = target_width
-        self.target_height = target_height
-        self.frame_counter = 0
-        self.process_every_n_frames = 2
-
-        # Load YOLO model
+    """Main face recognition system with multi-threading"""
+    
+    def __init__(self, model_path='model/yolov11l-face.pt', camera_id=0):
+        # Validate model path
+        if not os.path.exists(model_path):
+            logger.error(f"Model file not found: {model_path}")
+            raise FileNotFoundError(f"Model file not found: {model_path}")
+        
+        # Load model with error handling
         try:
             self.model = YOLO(model_path)
-            self.model.fuse()
+            # Try to move to CUDA if available
             if torch.cuda.is_available():
-                self.model.to('cuda:0').half()
-                logger.info("Model loaded on CUDA with half precision")
+                try:
+                    self.model.to('cuda:0')
+                    logger.info("Model loaded on CUDA")
+                except Exception as e:
+                    logger.warning(f"Failed to move model to CUDA: {e}, using CPU")
             else:
-                logger.info("Model loaded on CPU")
+                logger.info("CUDA not available, using CPU")
         except Exception as e:
-            logger.error(f"Fatal error loading YOLO model: {e}")
-            sys.exit(1)
-
-        self.db_manager = DatabaseManager()
-
-        # Threading and Queues
-        self.embedding_queue = queue.Queue(maxsize=5)
-        self.db_query_queue = queue.Queue(maxsize=10)
-        self.reid_lock = threading.Lock()
-        self.processing_lock = threading.Lock()
-        self.detection_lock = threading.Lock()
+            logger.error(f"Error loading YOLO model: {e}")
+            raise
         
-        # Tracking Data
+        # Initialize camera with error handling
+        self.cap = None
+        self._initialize_camera(camera_id)
+        
+        self.db_manager = DatabaseManager()
+        
+        # Threading components
+        self.detection_queue = queue.Queue(maxsize=10)
+        self.embedding_queue = queue.Queue(maxsize=20)
+        self.result_queue = queue.Queue(maxsize=20)
+        
+        # Tracking data
+        self.track_id_to_embedding = {}
         self.track_id_to_reid = {}
-        self.processing_tracks = set()
-        self.track_last_processed = {}
-        self.track_cooldown_time = 5.0
+        self.processing_tracks = set()  # Tracks currently being processed
+        
+        # Threading pools - use ThreadPoolExecutor to avoid pickle issues
+        max_workers = min(2, mp.cpu_count())
+        self.embedding_executor = ThreadPoolExecutor(max_workers=max_workers) if FACE_ENCODING_AVAILABLE else None
+        self.db_executor = ThreadPoolExecutor(max_workers=1)
+        
+        # Control flags
+        self.running = True
+        self.frame_lock = threading.Lock()
+        self.detection_lock = threading.Lock()
+        self.current_frame = None
         self.current_detections = []
         self.visible_reids = []
-
-        # Control & Stats
-        self.running = True
+        
+        # FPS tracking
         self.prev_time = time.time()
         self.frame_count = 0
         self.fps = 0
-
-        self.start_background_threads()
-
-    def start_background_threads(self):
-        """Initializes and starts all background worker threads."""
-        self.embedding_thread = threading.Thread(target=self._embedding_worker, daemon=True)
-        self.db_thread = threading.Thread(target=self._database_worker, daemon=True)
-        self.embedding_thread.start()
-        self.db_thread.start()
-        logger.info("Background threads started")
-
-    def _preprocess_frame(self, frame):
-        """Resizes frame for consistent processing."""
-        return cv2.resize(frame, (self.target_width, self.target_height), interpolation=cv2.INTER_LINEAR)
-
-    def _assess_face_quality(self, face_crop):
-        """Performs fast checks on a face crop for size, lighting, and blur."""
-        if face_crop is None or face_crop.size == 0:
-            return False, "Empty crop"
-        if face_crop.shape[0] < 60 or face_crop.shape[1] < 60:
-            return False, "Too small"
-        gray = cv2.cvtColor(face_crop, cv2.COLOR_BGR2GRAY)
-        mean_intensity = np.mean(gray)
-        if not 30 < mean_intensity < 225:
-            return False, "Bad lighting"
-        if cv2.Laplacian(gray, cv2.CV_64F).var() < 50:
-            return False, "Too blurry"
-        return True, "Good quality"
-
-    def _initiate_processing(self, track_id):
-        """Atomically checks if a track is new and ready for processing."""
-        with self.processing_lock:
-            if track_id in self.track_id_to_reid or track_id in self.processing_tracks:
-                return False
-            if time.time() - self.track_last_processed.get(track_id, 0) < self.track_cooldown_time:
-                return False
-            self.processing_tracks.add(track_id)
-            return True
-
-    def _safe_face_encoding(self, face_crop, track_id):
-        """Generates an embedding if the face crop is of sufficient quality."""
-        is_good, reason = self._assess_face_quality(face_crop)
-        if not is_good:
-            logger.debug(f"Skipping track {track_id} (quality: {reason})")
-            return None
-        try:
-            face_rgb = cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB)
-            face_resized = cv2.resize(face_rgb, (160, 160), interpolation=cv2.INTER_LINEAR)
-            return face_encoding_worker(face_resized)
-        except Exception as e:
-            logger.error(f"Encoding error for track {track_id}: {e}")
-            return None
-
-    def _embedding_worker(self):
-        """Thread worker that produces face embeddings from detections."""
-        while self.running:
+    
+    def _initialize_camera(self, camera_id):
+        """Initialize camera with multiple backends"""
+        backends = [cv2.CAP_DSHOW, cv2.CAP_V4L2, cv2.CAP_ANY]
+        
+        for backend in backends:
             try:
-                detection = self.embedding_queue.get(timeout=1)
-                track_id = detection.track_id
-                self.track_last_processed[track_id] = time.time()
-                embedding = self._safe_face_encoding(detection.face_crop, track_id)
-
-                if embedding is not None:
-                    self.db_query_queue.put({'track_id': track_id, 'embedding': embedding, 'detection': detection})
-                else:
-                    with self.processing_lock:
-                        self.processing_tracks.discard(track_id)
-                self.embedding_queue.task_done()
-            except queue.Empty:
+                self.cap = cv2.VideoCapture(camera_id, backend)
+                if self.cap.isOpened():
+                    # Test read
+                    ret, frame = self.cap.read()
+                    if ret:
+                        logger.info(f"Camera initialized successfully with backend {backend}")
+                        # Set camera properties for better performance
+                        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                        self.cap.set(cv2.CAP_PROP_FPS, 30)
+                        return
+                    else:
+                        self.cap.release()
+                        self.cap = None
+            except Exception as e:
+                logger.warning(f"Failed to initialize camera with backend {backend}: {e}")
                 continue
-
-    def _database_worker(self):
-        """Thread worker that handles database queries and new registrations."""
+        
+        logger.error("Failed to initialize camera with any backend")
+        raise RuntimeError("Could not initialize camera")
+    
+    def detection_thread(self):
+        """Thread for YOLO face detection - runs once per frame"""
+        logger.info("Detection thread started")
+        
         while self.running:
             try:
-                data = self.db_query_queue.get(timeout=1)
-                track_id, embedding = data['track_id'], data['embedding']
-                reid_num, name = self.db_manager.query_face(embedding)
-
-                if reid_num is not None:
-                    with self.reid_lock:
-                        self.track_id_to_reid[track_id] = reid_num
-                else:
-                    self._process_new_person(track_id, embedding, data['detection'])
+                if not self.cap or not self.cap.isOpened():
+                    logger.error("Camera not available")
+                    time.sleep(1)
+                    continue
                 
-                with self.processing_lock:
-                    self.processing_tracks.discard(track_id)
-                self.db_query_queue.task_done()
+                ret, frame = self.cap.read()
+                if not ret:
+                    logger.warning("Failed to read frame from camera")
+                    time.sleep(0.1)
+                    continue
+                
+                # Validate frame
+                if frame is None or frame.size == 0:
+                    continue
+                
+                # Run YOLO detection once per frame
+                try:
+                    results = self.model.track(frame, stream=True, persist=True, 
+                                            tracker="botsort.yaml", verbose=False)
+                except Exception as e:
+                    logger.error(f"YOLO tracking error: {e}")
+                    # Fallback to prediction without tracking
+                    try:
+                        results = self.model.predict(frame, verbose=False)
+                    except Exception as e2:
+                        logger.error(f"YOLO prediction error: {e2}")
+                        time.sleep(0.1)
+                        continue
+                
+                detections = []
+                embedding_candidates = []
+                
+                for result in results:
+                    boxes = getattr(result, 'boxes', None)
+                    if boxes is None:
+                        continue
+                        
+                    for box in boxes:
+                        try:
+                            # Safely extract coordinates
+                            coords = box.xyxy[0].cpu().numpy() if hasattr(box.xyxy[0], 'cpu') else box.xyxy[0]
+                            x1, y1, x2, y2 = map(int, coords)
+                            conf = float(box.conf[0])
+                            
+                            # Handle tracking ID safely
+                            if hasattr(box, 'id') and box.id is not None:
+                                track_id = int(box.id[0])
+                            else:
+                                # Generate a deterministic ID based on box position and size
+                                track_id = abs(hash(f"{x1}_{y1}_{x2}_{y2}")) % 100000
+                            
+                            # Validate bounding box
+                            if x1 >= x2 or y1 >= y2 or x1 < 0 or y1 < 0:
+                                continue
+                            
+                            if conf > 0.5:
+                                detection = {
+                                    'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2,
+                                    'conf': conf, 'track_id': track_id
+                                }
+                                detections.append(detection)
+                                
+                                # Check if we need to process this track for embedding
+                                if (track_id not in self.track_id_to_embedding and 
+                                    track_id not in self.processing_tracks and
+                                    FACE_ENCODING_AVAILABLE and self.embedding_executor is not None):
+                                    
+                                    # Validate crop coordinates
+                                    h, w = frame.shape[:2]
+                                    x1_crop = max(0, x1)
+                                    y1_crop = max(0, y1)
+                                    x2_crop = min(w, x2)
+                                    y2_crop = min(h, y2)
+                                    
+                                    if x2_crop > x1_crop and y2_crop > y1_crop:
+                                        face_crop = frame[y1_crop:y2_crop, x1_crop:x2_crop]
+                                        if face_crop.size > 0:  # Ensure valid crop
+                                            embedding_candidates.append(FaceDetection(
+                                                x1=x1, y1=y1, x2=x2, y2=y2,
+                                                conf=conf, track_id=track_id,
+                                                face_crop=face_crop.copy(),
+                                                frame_timestamp=time.time()
+                                            ))
+                        except Exception as e:
+                            logger.error(f"Error processing detection box: {e}")
+                            continue
+                
+                # Store frame and detections for rendering
+                with self.frame_lock:
+                    self.current_frame = frame.copy()
+                with self.detection_lock:
+                    self.current_detections = detections
+                
+                # Send only new faces for embedding processing
+                if embedding_candidates and self.embedding_executor:
+                    try:
+                        self.detection_queue.put(embedding_candidates, timeout=0.01)
+                    except queue.Full:
+                        pass  # Skip if queue is full
+                
+                # Small delay to prevent CPU overload
+                time.sleep(0.033)  # ~30 FPS
+                
+            except Exception as e:
+                logger.error(f"Error in detection thread: {e}")
+                time.sleep(0.1)  # Prevent rapid error loops
+    
+    def embedding_thread(self):
+        """Thread for processing face embeddings"""
+        logger.info("Embedding thread started")
+        
+        if not FACE_ENCODING_AVAILABLE or not self.embedding_executor:
+            logger.warning("Embedding executor not available, embedding thread disabled")
+            return
+        
+        while self.running:
+            try:
+                detections = self.detection_queue.get(timeout=1.0)
+                
+                for detection in detections:
+                    track_id = detection.track_id
+                    
+                    # Skip if already processed or currently processing
+                    if (track_id in self.track_id_to_embedding or 
+                        track_id in self.processing_tracks):
+                        continue
+                    
+                    # Mark as processing
+                    self.processing_tracks.add(track_id)
+                    
+                    # Submit face encoding task using ThreadPoolExecutor (avoids pickle issues)
+                    try:
+                        # Create a wrapper function to avoid pickle issues
+                        def encode_face_wrapper(face_crop):
+                                return face_encoding_worker.face_encoding_worker(face_crop)
+                        future = self.embedding_executor.submit(
+                            encode_face_wrapper, detection.face_crop
+                        )
+                        
+                        # Submit database query task
+                        self.db_executor.submit(
+                            self._process_embedding_result, 
+                            future, detection
+                        )
+                    except Exception as e:
+                        logger.error(f"Error submitting embedding task: {e}")
+                        self.processing_tracks.discard(track_id)
+                
             except queue.Empty:
                 continue
-
-    def _process_new_person(self, track_id, embedding, detection):
-        """Saves a new person's data to the database and memory maps."""
+            except Exception as e:
+                logger.error(f"Error in embedding thread: {e}")
+    
+    def _process_embedding_result(self, future, detection):
+        """Process the result of face encoding"""
+        track_id = detection.track_id
+        
         try:
-            new_reid_num = self.db_manager.get_next_reid_num()
-            new_name = f"unknown_{new_reid_num}"
-            img_filename = os.path.join("saved_faces", f"reid_{new_reid_num}.jpg")
-            os.makedirs("saved_faces", exist_ok=True)
+            embedding = future.result(timeout=10.0)  # Increased timeout
             
-            if not cv2.imwrite(img_filename, detection.face_crop):
-                logger.error(f"CRITICAL: Failed to save image {img_filename}")
+            if embedding is None:
+                logger.warning(f"No embedding generated for track {track_id}")
+                self.processing_tracks.discard(track_id)
                 return
             
-            self.db_manager.face_db.add(
-                ids=[f"reid_{new_reid_num}"],
-                embeddings=[embedding],
-                metadatas=[{"name": new_name, "image_path": img_filename}]
-            )
-
-            self.db_manager.reid_name_map[f"reid_{new_reid_num}"] = new_name
-            with self.reid_lock:
-                self.track_id_to_reid[track_id] = new_reid_num
-            logger.info(f"✅ Successfully registered {new_name} (reid_{new_reid_num}).")
-        except Exception as e:
-            logger.error(f"EXCEPTION in _process_new_person for track {track_id}: {e}")
-            traceback.print_exc()
-
-    def process_frame(self, frame):
-        """Main processing entry point for each new frame from the camera."""
-        if frame is None:
-            return None
-        processed_frame = self._preprocess_frame(frame)
-        if processed_frame is None:
-            return None # Added check to prevent error
+            # Store embedding
+            self.track_id_to_embedding[track_id] = embedding
             
-        self.frame_counter += 1
+            # Query database for match
+            reid_num, name = self.db_manager.query_face(embedding)
+            
+            if reid_num is not None:
+                # Found existing person
+                self.track_id_to_reid[track_id] = reid_num
+                logger.info(f"Matched track {track_id} to existing person: {name}")
+            else:
+                # New person
+                new_reid_num = self.db_manager.get_next_reid_num()
+                new_name = f"unknown_{new_reid_num}"
+                
+                if self.db_manager.add_face(embedding, new_reid_num, new_name):
+                    self.track_id_to_reid[track_id] = new_reid_num
+                    logger.info(f"Added new person: {new_name} for track {track_id}")
+                else:
+                    logger.error(f"Failed to add new person for track {track_id}")
+            
+        except Exception as e:
+            logger.error(f"Error processing embedding result for track {track_id}: {e}")
+        finally:
+            # Always remove from processing set
+            self.processing_tracks.discard(track_id)
+    
+    def render_frame(self):
+        """Render frame with face recognition results - no YOLO inference"""
+        with self.frame_lock:
+            if self.current_frame is None:
+                return None
+            frame = self.current_frame.copy()
         
-        if self.frame_counter % self.process_every_n_frames == 0:
-            detections = []
-            try:
-                results = self.model.track(processed_frame, stream=False, persist=True, tracker="botsort.yaml", conf=0.7, verbose=False)
-                if results and results[0].boxes:
-                    for box in results[0].boxes:
-                        if box.id is None: continue
-                        x1, y1, x2, y2 = map(int, box.xyxy[0])
-                        track_id = int(box.id[0])
-                        
-                        detections.append({'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2, 'track_id': track_id})
-
-                        if self._initiate_processing(track_id):
-                            face_crop = processed_frame[y1:y2, x1:x2]
-                            face_detection = FaceDetection(x1, y1, x2, y2, float(box.conf[0]), track_id, face_crop, time.time())
-                            try:
-                                self.embedding_queue.put_nowait(face_detection)
-                            except queue.Full:
-                                with self.processing_lock:
-                                    self.processing_tracks.discard(track_id)
-            except Exception as e:
-                logger.error(f"YOLO tracking error: {e}")
-
-            with self.detection_lock:
-                self.current_detections = detections
-        else:
-             with self.detection_lock:
-                detections = self.current_detections
-
-        return self.render_frame(processed_frame, detections)
-
-    def render_frame(self, frame, detections):
-        """Draws bounding boxes and labels on the frame."""
-        self.visible_reids.clear()
-        for det in detections:
-            track_id = det['track_id']
-            label, color = "Unknown", (0, 0, 255)
+        with self.detection_lock:
+            detections = self.current_detections.copy()
+        
+        self.visible_reids = []
+        
+        # Process cached detections (no YOLO inference here)
+        for detection in detections:
+            x1, y1, x2, y2 = detection['x1'], detection['y1'], detection['x2'], detection['y2']
+            conf = detection['conf']
+            track_id = detection['track_id']
+            
+            # Determine label and color
+            label = "Processing..."
+            color = (0, 165, 255)  # Orange for processing
             
             if track_id in self.processing_tracks:
-                label, color = "Processing...", (0, 165, 255)
+                label = "Processing..."
+                color = (0, 165, 255)
             elif track_id in self.track_id_to_reid:
                 reid_num = self.track_id_to_reid[track_id]
                 key = f"reid_{reid_num}"
                 self.visible_reids.append(key)
-                name = self.db_manager.reid_name_map.get(key, key)
-                label, color = name, (0, 255, 0)
+                name = self.db_manager.reid_name_map.get(key, f"unknown_{reid_num}")
+                label = f"{name} ({key})"
+                color = (0, 255, 0)  # Green for recognized
+            else:
+                if self.embedding_executor is None:
+                    label = "Embedding disabled"
+                    color = (128, 128, 128)  # Gray
+                else:
+                    label = "Unknown"
+                    color = (0, 0, 255)  # Red for unknown
             
-            x1, y1, x2, y2 = det['x1'], det['y1'], det['x2'], det['y2']
+            # Validate coordinates before drawing
+            h, w = frame.shape[:2]
+            x1 = max(0, min(x1, w-1))
+            y1 = max(0, min(y1, h-1))
+            x2 = max(0, min(x2, w-1))
+            y2 = max(0, min(y2, h-1))
+            
+            # Draw bounding box and label
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-            cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+            
+            # Ensure label position is within frame
+            label_y = max(y1 - 10, 20)
+            cv2.putText(frame, f"{label} | ID {track_id} | {conf:.2f}",
+                       (x1, label_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
         
-        if time.time() - self.prev_time >= 1.0:
-            self.fps = self.frame_count
-            self.frame_count = 0
-            self.prev_time = time.time()
+        # Display FPS (more accurate calculation)
+        curr_time = time.time()
         self.frame_count += 1
+        if curr_time - self.prev_time >= 1.0:  # Update FPS every second
+            self.fps = self.frame_count / (curr_time - self.prev_time)
+            self.prev_time = curr_time
+            self.frame_count = 0
         
-        cv2.putText(frame, f"FPS: {self.fps}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+        cv2.putText(frame, f"FPS: {self.fps:.1f}", (10, 30),
+                   cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 0), 2)
+        
+        # Display processing info
+        processing_count = len(self.processing_tracks)
+        cv2.putText(frame, f"Processing: {processing_count}", (10, 60),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        
+        # Display detection count
+        cv2.putText(frame, f"Faces: {len(detections)}", (10, 90),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        
+        # Display status
+        embedding_status = "Enabled" if self.embedding_executor else "Disabled"
+        cv2.putText(frame, f"Embedding: {embedding_status}", (10, 120),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        
         return frame
-
-    def get_all_faces(self):
-        """Retrieves all registered faces for display in the gallery."""
-        all_faces = []
-        for reid_id, name in self.db_manager.reid_name_map.items():
-            try:
-                meta = self.db_manager.face_db.get(ids=[reid_id], include=["metadatas"])['metadatas'][0]
-                all_faces.append({'reid_id': reid_id, 'name': name, 'image_path': meta.get('image_path', ''), 'visible': reid_id in self.visible_reids})
-            except Exception as e:
-                logger.error(f"Error getting metadata for {reid_id}: {e}")
-        return all_faces
-
-    def update_face_name(self, reid_id, new_name):
-        """Updates a face's name in the database and memory."""
-        if self.db_manager.update_name(reid_id, new_name):
-            return True, f"Updated to '{new_name}'"
-        return False, "Failed to update."
-
-    def delete_face(self, reid_id):
-        """Deletes a face from the database and all internal tracking."""
-        try:
-            self.db_manager.face_db.delete(ids=[reid_id])
-            if reid_id in self.db_manager.reid_name_map:
-                del self.db_manager.reid_name_map[reid_id]
-            with self.reid_lock:
-                for tid, rid in list(self.track_id_to_reid.items()):
-                    if f"reid_{rid}" == reid_id:
-                        del self.track_id_to_reid[tid]
-            return True, f"Deleted {reid_id}"
-        except Exception as e:
-            logger.error(f"Error deleting face {reid_id}: {e}")
-            return False, "Error deleting face."
-
-    def cleanup(self):
-        """Shuts down all background threads."""
-        logger.info("Cleaning up resources...")
-        self.running = False
-        if self.embedding_thread.is_alive(): self.embedding_thread.join()
-        if self.db_thread.is_alive(): self.db_thread.join()
-        logger.info("Cleanup complete.")
-
-# --- GUI Classes ---
-class VideoThread(QThread):
-    """Runs the video processing loop in a background Qt thread."""
-    change_pixmap_signal = pyqtSignal(np.ndarray)
-    update_gallery_signal = pyqtSignal(list)
-
-    def __init__(self, system: FaceRecognitionSystem):
-        super().__init__()
-        self.system = system
-        self._run_flag = True
-
-    def run(self):
-        cap = cv2.VideoCapture(0)
-        if not cap.isOpened():
-            logger.error("Could not open video stream.")
+    
+    def handle_user_input(self):
+        """Handle interactive renaming"""
+        print("\nVisible ReIDs:")
+        if not self.visible_reids:
+            print("  No visible ReIDs")
             return
-
-        gallery_update_counter = 0
-        while self._run_flag:
-            ret, frame = cap.read()
-            if ret:
-                processed_frame = self.system.process_frame(frame)
-                if processed_frame is not None:
-                    self.change_pixmap_signal.emit(processed_frame)
-
-                gallery_update_counter += 1
-                if gallery_update_counter % 30 == 0:
-                    self.update_gallery_signal.emit(self.system.get_all_faces())
-            time.sleep(0.01)
-        cap.release()
-
-    def stop(self):
-        self._run_flag = False
-        self.wait()
-
-class FaceRecognitionApp(QMainWindow):
-    """The main application window (GUI)."""
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("Face Recognition System")
-        self.show()
-        self.system = FaceRecognitionSystem()
-        self.selected_reid = None
-        self.initUI()
-        self.start_video_thread()
-
-    def initUI(self):
-        """Sets up the entire user interface."""
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        main_layout = QHBoxLayout(central_widget)
-
-        # Video Feed Panel
-        left_layout = QVBoxLayout()
-        self.video_label = QLabel("Starting camera...")
-        self.video_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.video_label.setStyleSheet("border: 2px solid #3498db; background-color: #000;")
-        left_layout.addWidget(self.video_label)
-        main_layout.addLayout(left_layout, 3)
-
-        self.video_label.setFixedSize(1280, 720)
-        # Management Panel
-        right_layout = QVBoxLayout()
-        self.scroll_area = QScrollArea()
-        self.scroll_area.setWidgetResizable(True)
-        self.gallery_widget = QWidget()
-        self.gallery_layout = QGridLayout(self.gallery_widget)
-        self.gallery_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self.scroll_area.setWidget(self.gallery_widget)
-        self.status_label = QLabel("System Ready")
-        self.name_input = QLineEdit()
-        self.name_input.setPlaceholderText("Select face, enter new name...")
-        self.update_btn = QPushButton("Update Name")
-        self.delete_btn = QPushButton("Delete Face")
+            
+        for rk in self.visible_reids:
+            print(f"  {rk} --> {self.db_manager.reid_name_map.get(rk, 'unknown')}")
         
-        right_layout.addWidget(QLabel("<h2>Face Management</h2>"))
-        right_layout.addWidget(self.status_label)
-        right_layout.addWidget(self.scroll_area, 1)
-        right_layout.addWidget(self.name_input)
-        right_layout.addWidget(self.update_btn)
-        right_layout.addWidget(self.delete_btn)
-        main_layout.addLayout(right_layout, 1)
+        try:
+            sel = input("Enter ReID to assign name (e.g., reid_3): ").strip()
+            if sel in self.visible_reids:
+                new_name = input(f"Enter new name for {sel}: ").strip()
+                if new_name:
+                    if self.db_manager.update_name(sel, new_name):
+                        print(f"[INFO] Updated {sel} to name: {new_name}")
+                    else:
+                        print(f"[ERROR] Failed to update {sel}")
+                else:
+                    print("[WARN] Name cannot be empty")
+            else:
+                print(f"[WARN] {sel} is not currently visible!")
+        except KeyboardInterrupt:
+            print("\n[INFO] Input cancelled")
+        except Exception as e:
+            print(f"[ERROR] Input error: {e}")
+    
+    def run(self):
+        """Main execution loop"""
+        # Start threads
+        detection_thread = threading.Thread(target=self.detection_thread, daemon=True)
+        embedding_thread = threading.Thread(target=self.embedding_thread, daemon=True)
+        
+        detection_thread.start()
+        embedding_thread.start()
+        
+        logger.info("Face recognition system started - optimized for performance")
+        print("\nControls:")
+        print("  ESC/Q - Quit")
+        print("  S - Interactive renaming")
+        print("  I - Performance info")
+        
+        try:
+            while self.running:
+                # Render and display frame (no YOLO inference here)
+                frame = self.render_frame()
+                if frame is not None:
+                    cv2.imshow("Multi-threaded Face Recognition", frame)
+                else:
+                    # Display loading screen
+                    loading_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                    cv2.putText(loading_frame, "Loading...", (250, 240),
+                               cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+                    cv2.imshow("Multi-threaded Face Recognition", loading_frame)
+                
+                # Handle keyboard input
+                key = cv2.waitKey(1) & 0xFF
+                
+                if key == 27:  # ESC
+                    break
+                elif key == ord('s') or key == ord('S'):
+                    # Interactive renaming
+                    self.handle_user_input()
+                elif key == ord('q') or key == ord('Q'):
+                    break
+                elif key == ord('i') or key == ord('I'):
+                    # Print performance info
+                    print(f"\nPerformance Info:")
+                    print(f"Processing tracks: {len(self.processing_tracks)}")
+                    print(f"Known tracks: {len(self.track_id_to_reid)}")
+                    print(f"Total embeddings: {len(self.track_id_to_embedding)}")
+                    print(f"Current FPS: {self.fps:.1f}")
+                    print(f"Camera status: {'OK' if self.cap and self.cap.isOpened() else 'ERROR'}")
+                    print(f"Database status: {'OK' if self.db_manager.face_db else 'ERROR'}")
+                    print(f"Embedding worker: {'OK' if self.embedding_executor else 'DISABLED'}")
+        
+        except KeyboardInterrupt:
+            logger.info("Interrupted by user")
+        except Exception as e:
+            logger.error(f"Error in main loop: {e}")
+        finally:
+            self.cleanup()
+    
+    def cleanup(self):
+        """Clean up resources"""
+        logger.info("Cleaning up...")
+        self.running = False
+        
+        # Close video capture
+        if self.cap:
+            self.cap.release()
+        
+        # Close windows
+        cv2.destroyAllWindows()
+        
+        # Shutdown thread pools
+        if self.embedding_executor:
+            self.embedding_executor.shutdown(wait=True)
+        if self.db_executor:
+            self.db_executor.shutdown(wait=True)
+        
+        logger.info("Cleanup complete")
 
-        # Connect signals
-        self.update_btn.clicked.connect(self.update_face_name)
-        self.delete_btn.clicked.connect(self.delete_face)
-
-    def start_video_thread(self):
-        """Creates and starts the video processing thread."""
-        self.thread = VideoThread(self.system)
-        self.thread.change_pixmap_signal.connect(self.update_image)
-        self.thread.update_gallery_signal.connect(self.update_gallery_display)
-        self.thread.start()
-        self.update_gallery_display(self.system.get_all_faces())
-
-    @pyqtSlot(np.ndarray)
-    def update_image(self, cv_img):
-        """Updates the video label with a new frame from the VideoThread."""
-        h, w, ch = cv_img.shape
-        bytes_per_line = ch * w
-        # The fix is to remove .rgbSwapped() from the end of this line.
-        # QImage.Format_BGR888 correctly interprets the OpenCV image format.
-        qt_img = QImage(cv_img.data, w, h, bytes_per_line, QImage.Format.Format_BGR888)
-        pixmap = QPixmap.fromImage(qt_img)
-        self.video_label.setPixmap(pixmap.scaled(self.video_label.size(), Qt.AspectRatioMode.KeepAspectRatio))
-    @pyqtSlot(list)
-    def update_gallery_display(self, faces: list):
-        """Clears and repopulates the face gallery."""
-        # Safely clear existing widgets
-        for i in reversed(range(self.gallery_layout.count())):
-            item = self.gallery_layout.itemAt(i)
-            if item and item.widget():
-                item.widget().setParent(None)
-
-        for i, face in enumerate(faces):
-            if not face.get('image_path') or not os.path.exists(face['image_path']): continue
-            
-            face_widget = QWidget()
-            face_layout = QVBoxLayout(face_widget)
-            img_label = QLabel()
-            img_label.setPixmap(QPixmap(face['image_path']).scaled(128, 128, Qt.AspectRatioMode.KeepAspectRatio))
-            info_label = QLabel(f"<b>{face['name']}</b><br><i>{face['reid_id']}</i>")
-            face_layout.addWidget(img_label)
-            face_layout.addWidget(info_label)
-
-            style = "border: 3px solid {}; border-radius: 5px;".format("#2ecc71" if face['visible'] else "#7f8c8d")
-            if face['reid_id'] == self.selected_reid:
-                style = "border: 3px solid #3498db; border-radius: 5px;"
-            face_widget.setStyleSheet(style)
-            
-            face_widget.mousePressEvent = lambda e, r=face['reid_id']: self.select_face(r)
-            self.gallery_layout.addWidget(face_widget, i // 2, i % 2)
-
-    def select_face(self, reid_id):
-        self.selected_reid = reid_id
-        self.name_input.setText(self.system.db_manager.reid_name_map.get(reid_id, ""))
-        self.status_label.setText(f"Selected: {reid_id}")
-        self.update_gallery_display(self.system.get_all_faces())
-
-    def update_face_name(self):
-        if not self.selected_reid or not self.name_input.text().strip():
-            self.status_label.setText("❌ Select a face and enter a name.")
-            return
-        success, msg = self.system.update_face_name(self.selected_reid, self.name_input.text().strip())
-        self.status_label.setText(("✅ " if success else "❌ ") + msg)
-        self.update_gallery_display(self.system.get_all_faces())
-
-    def delete_face(self):
-        if not self.selected_reid:
-            self.status_label.setText("❌ Select a face to delete.")
-            return
-        success, msg = self.system.delete_face(self.selected_reid)
-        self.status_label.setText(("✅ " if success else "❌ ") + msg)
-        self.selected_reid = None
-        self.name_input.clear()
-        self.update_gallery_display(self.system.get_all_faces())
-
-    def closeEvent(self, event):
-        """Ensures threads are stopped cleanly when the window is closed."""
-        self.thread.stop()
-        self.system.cleanup()
-        event.accept()
+def main():
+    """Main function"""
+    try:
+        print("Initializing Face Recognition System...")
+        system = FaceRecognitionSystem()
+        system.run()
+    except FileNotFoundError as e:
+        logger.error(f"Required file not found: {e}")
+        print("Please ensure all required files are present:")
+        print("  - model/yolov11l-face.pt (YOLO model)")
+        print("  - face_encoding_worker.py (face encoding module)")
+    except Exception as e:
+        logger.error(f"Error in main: {e}")
+        print(f"System error: {e}")
+        raise
 
 if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    window = FaceRecognitionApp()
-    window.show()
-    sys.exit(app.exec())
+    main()
