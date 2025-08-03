@@ -1,62 +1,76 @@
+import os
 import threading
-from typing import List, Optional, Tuple
-from chromadb import logger
 import chromadb
 
 
 class DatabaseManager:
-    """Thread-safe database operations"""
-    
-    def __init__(self, db_path="./face_data_db"):
+    def __init__(self, db_path: str = "./face_data_db") -> None:
         self.db_path = db_path
-        self.client = chromadb.PersistentClient(path=db_path)
-        self.face_db = self.client.get_or_create_collection("face_db")
+        self.client = None
+        self.face_db = None       
         self.reid_name_map = {}
-        self.lock = threading.Lock()
-        self._load_existing_data()
+        self._lock = threading.Lock()
     
-    def _load_existing_data(self):
-        """Load existing ReID data from database"""
+    def _connect(self) -> None:
+        """Establishes connection to ChromaDB database."""
+        if self.client is not None:
+            return
         try:
-            all_faces = self.face_db.get(include=["metadatas"])
-            ids = all_faces.get("ids", [])
-            metadatas = all_faces.get("metadatas", [])
-            
-            for i, reid_key in enumerate(ids):
-                name = metadatas[i].get("name", "unknown")
-                self.reid_name_map[reid_key] = name
-            
-            logger.info(f"Loaded {len(ids)} existing face records")
+            os.makedirs(self.db_path, exist_ok=True)
+            self.client = chromadb.PersistentClient(path=self.db_path)
+            self.face_db = self.client.get_or_create_collection("face_db")
+            self._load_existing()
+            print(f"ChromaDB ready")
         except Exception as e:
-            logger.error(f"Error loading existing data: {e}")
+            print(f"DB failed ({e}) - using memory")
     
-    def query_face(self, embedding: List[float], threshold: float = 0.5) -> Tuple[Optional[int], Optional[str]]:
-        """Query database for face match"""
-        with self.lock:
-            try:
-                qr = self.face_db.query(
-                    query_embeddings=[embedding],
-                    n_results=1
-                )
-                match_ids = qr.get("ids", [[]])[0]
-                match_dists = qr.get("distances", [[]])[0]
-                
-                if match_ids and match_dists and match_dists[0] < threshold:
-                    matched_key = match_ids[0]
-                    matched_num = int(matched_key.split("_")[1])
-                    name = self.reid_name_map.get(matched_key, f"unknown_{matched_num}")
-                    return matched_num, name
-                
-                return None, None
-            except Exception as e:
-                logger.error(f"Error querying face: {e}")
-                return None, None
+    def _load_existing(self):
+        """Load existing face data from database."""
+        try:
+            if self.face_db:
+                print("Check")
+                print(self.face_db.count())
+                result = self.face_db.get(include=["metadatas"])
+                ids = result["ids"]
+                metadatas = result["metadatas"]
+
+                for i, key in enumerate(ids):
+                    name = "Unknown"
+                    if metadatas and i < len(metadatas):
+                        name = metadatas[i].get("name", f"unknown_{i}") or "Unknown"
+                    self.reid_name_map[key] = name
+                print(f"Loaded {len(self.reid_name_map)} existing faces")
+        except Exception as e:
+            print(f"Loading existing failed: {e}")
     
-    def add_face(self, embedding: List[float], reid_num: int, name: str) -> bool:
-        """Add new face to database"""
-        with self.lock:
-            try:
-                key = f"reid_{reid_num}"
+    def query(self, embedding, threshold: float = 0.4):
+        """Query database for matching face."""
+        try:
+            with self._lock:
+                if not self.face_db or self.face_db.count() == 0:
+                    return None, None
+                
+                qr = self.face_db.query(query_embeddings=[embedding], n_results=1)
+                ids = qr.get("ids", [[]])[0]
+                distances = qr.get("distances", [[]])
+                
+                if ids and distances and distances[0][0] < threshold:
+                    key = ids[0]
+                    reid_num = int(key.split("_")[1])
+                    name = self.reid_name_map.get(key, f"unknown_{reid_num}")
+                    return reid_num, name
+        except Exception as e:
+            print(f"DB query error: {e}")
+        return None, None
+    
+    def add(self, embedding, reid_num: int, name: str) -> bool:
+        """Add new face to database."""
+        key = f"reid_{reid_num}"
+        try:
+            with self._lock:
+                if not self.face_db: 
+                    return False
+                
                 self.face_db.add(
                     ids=[key],
                     embeddings=[embedding],
@@ -64,23 +78,43 @@ class DatabaseManager:
                 )
                 self.reid_name_map[key] = name
                 return True
-            except Exception as e:
-                logger.error(f"Error adding face: {e}")
-                return False
+        except Exception as e:
+            print(f"DB add error: {e}")
+            return False
     
-    def update_name(self, reid_key: str, new_name: str) -> bool:
-        """Update face name in database"""
-        with self.lock:
-            try:
-                self.face_db.update(ids=[reid_key], metadatas=[{"name": new_name}])
-                self.reid_name_map[reid_key] = new_name
+    def update_name(self, reid_num: int, new_name: str) -> bool:
+        """Update name for existing ReID."""
+        key = f"reid_{reid_num}"
+        try:
+            with self._lock:
+                if not self.face_db:
+                    print("ERROR: face_db is not initialized")
+                    return False
+                
+                self.face_db.update(
+                    ids=[key],
+                    metadatas=[{"name": new_name}]
+                )
+                self.reid_name_map[key] = new_name
+                print(f"Updated ReID {reid_num} name to: {new_name}")
                 return True
-            except Exception as e:
-                logger.error(f"Error updating name: {e}")
-                return False
+        except Exception as e:
+            print(f"DB update error: {e}")
+            return False
     
-    def get_next_reid_num(self) -> int:
-        """Get next available ReID number"""
-        with self.lock:
-            existing_nums = [int(k.split("_")[1]) for k in self.reid_name_map.keys()]
-            return max(existing_nums + [0]) + 1
+    def next_reid_num(self) -> int:
+        """Get next available ReID number."""
+        with self._lock:
+            if not self.reid_name_map:
+                return 1
+            
+            nums = []
+            for key in self.reid_name_map.keys():
+                if "_" in key:
+                    try:
+                        num = int(key.split("_")[1])
+                        nums.append(num)
+                    except (ValueError, IndexError):
+                        continue
+            
+            return max(nums + [0]) + 1
