@@ -24,7 +24,7 @@ import chromadb
 # ---------------------------------------------------
 try:
     # must return List[float] or None
-    from face_encoding import face_encoding_worker
+    from face_encoding_worker import face_encoding_worker
     FACE_ENCODING_AVAILABLE = True
 except ImportError:
     print("[WARN] face_encoding_worker.py not found - embeddings disabled")
