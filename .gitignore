@@ -4,3 +4,9 @@ debug_failed_faces/
 face_data_db/
 saved_faces/
 venv/
+sessions/
+py37_env/
+model/
+models/
+buffalo_l/
+buffalo_sc/

@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebGPU Face Tracking</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <!-- Startup Loading Overlay -->
+    <div id="loadingOverlay" class="loading-overlay">
+        <div class="loading-box">
+            <div class="loading-logo">AI Face Tracking <span>WebGPU</span></div>
+            <p id="loadingStatus" class="loading-status">Initializing AI models...</p>
+            <div class="progress-track">
+                <div id="progressBar" class="progress-bar"></div>
+            </div>
+            <p id="loadingDetail" class="loading-detail">Loading YOLO & face recognition models</p>
+        </div>
+    </div>
+    <div class="glass-panel main-container">
+        <header>
+            <h1>AI Face Tracking <span>WebGPU</span></h1>
+            <div class="session-controls">
+                <button id="btnNewSession" class="btn primary">New Session</button>
+                <button id="btnLoadSession" class="btn outline">Load Session</button>
+                <button id="btnDeleteSession" class="btn outline danger">Delete Session</button>
+                <button id="btnUploadImageTrigger" class="btn outline primary">Identify Photo</button>
+                <input type="file" id="imageUpload" accept="image/*" style="display: none;">
+                <div class="input-group">
+                    <input type="text" id="sessionInput" placeholder="Enter Session ID">
+                </div>
+            </div>
+        </header>
+
+        <div class="security-warning-banner">
+            <span class="warning-icon">⚠</span>
+            <strong>WARNING:</strong> This is an experimental, hackable research project. It is not intended for
+            production security use. The active session architecture implies potential data visibility.
+        </div>
+
+        <main>
+            <div class="video-container">
+                <video id="webcam" autoplay playsinline muted></video>
+                <canvas id="gpuCanvas"></canvas>
+            </div>
+
+            <aside class="side-panel">
+                <div class="status-card">
+                    <h3>Connection Status</h3>
+                    <div id="connectionStatus" class="status-indicator disconnected">Disconnected</div>
+                    <div class="model-status">
+                        <p><strong>YOLO:</strong> <span id="yoloStatus">-</span></p>
+                        <p><strong>EdgeFace:</strong> <span id="faceNetStatus">-</span></p>
+                    </div>
+                    <div class="model-selector">
+                        <label for="modelSelector"><strong>Embedding Model:</strong></label>
+                        <select id="modelSelector">
+                            <option value="edgeface_xs_gamma_06" selected>EdgeFace XS γ0.6 (7 MB)</option>
+                            <option value="edgeface_xxs">EdgeFace XXS (4.9 MB)</option>
+                            <option value="edgeface_s_gamma_05">EdgeFace S γ0.5 (14 MB)</option>
+                            <option value="edgeface_base">EdgeFace Base (70 MB)</option>
+                        </select>
+                    </div>
+                    <div id="fpsCounter">FPS: 0</div>
+                </div>
+
+                <div class="face-card">
+                    <h3>Closest Face Tracked</h3>
+                    <div class="tracking-info">
+                        <p><strong>ReID Name:</strong> <span id="trackName">None</span></p>
+                        <p><strong>Track ID:</strong> <span id="trackId">-</span></p>
+                    </div>
+                </div>
+
+                <div class="update-card">
+                    <h3>Update Identity</h3>
+                    <div class="reid-row">
+                        <input type="number" id="reidInput" placeholder="ReID (auto)" min="0">
+                        <button id="btnUseClosest" class="btn outline icon-btn" title="Use closest face ReID">⊙</button>
+                        <input type="text" id="nameInput" placeholder="Enter new name...">
+                    </div>
+                    <button id="btnUpdateName" class="btn primary full-width">Update Name</button>
+                </div>
+
+                <div class="debug-card">
+                    <h3>Debug Console</h3>
+                    <div id="debugConsole" class="debug-console"></div>
+                </div>
+
+                <div class="session-info">
+                    <p><strong>Active Session:</strong> <span id="activeSessionDisplay">None</span></p>
+                </div>
+            </aside>
+        </main>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/ort.all.min.js"></script>
+    <script src="app.js?v=3"></script>
+</body>
+
+</html>
