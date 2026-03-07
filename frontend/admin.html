@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Cross-Origin Isolation headers simulation might be needed depending on browser setup, though Admin purely consumes REST API -->
+    <title>Aeon Forge - Admin Dashboard</title>
+
+    <!-- Fonts: Use 'Inter' or 'Outfit' for modern tech aesthetic -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- Chart.js for the 2D Embedding Map -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <!-- Base Styling -->
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="admin.css">
+</head>
+
+<body class="admin-body">
+
+    <!-- Navbar / Header -->
+    <header class="admin-header">
+        <div class="logo">
+            <svg viewBox="0 0 24 24" fill="none" class="forge-icon" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+                <polyline points="2 17 12 22 22 17"></polyline>
+                <polyline points="2 12 12 17 22 12"></polyline>
+            </svg>
+            <h1>Forge <span>Admin</span></h1>
+        </div>
+        <div class="nav-links">
+            <button id="btnLogout" class="btn secondary danger hidden">Logout</button>
+            <button id="navBack" class="btn secondary">Back to Scanner</button>
+        </div>
+    </header>
+
+    <!-- Stage 0: Login Gate (Default) -->
+    <div id="loginGate" class="gate-container active-view">
+        <div class="glass-panel gate-panel">
+            <div class="login-header">
+                <svg viewBox="0 0 24 24" fill="none" class="lock-icon" stroke="currentColor" stroke-width="2">
+                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                    <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                </svg>
+                <h2>Admin Login</h2>
+                <p>Enter your credentials to access the Forge Control.</p>
+            </div>
+
+            <div class="form-group">
+                <label for="adminPassword">Password</label>
+                <input type="password" id="adminPassword" placeholder="••••••••" class="full-width">
+            </div>
+
+            <button id="btnLogin" class="btn primary full-width">Unlock Dashboard</button>
+            <p id="loginError" class="error-msg hidden">Invalid password. Please try again.</p>
+        </div>
+    </div>
+
+    <!-- Stage 1: Session Selection (Gatekeeper) -->
+    <div id="sessionGate" class="gate-container hidden">
+        <div class="glass-panel gate-panel">
+            <h2>Select Session</h2>
+            <p>Choose an active or historical session to administrate.</p>
+
+            <div id="sessionsLoading" class="loader">Loading sessions...</div>
+            <div id="sessionsList" class="sessions-grid">
+                <!-- Session cards injected here -->
+            </div>
+
+            <div class="divider"><span>OR</span></div>
+
+            <button id="btnCreateNew" class="btn primary full-width">Start Fresh Session</button>
+        </div>
+    </div>
+
+    <!-- Stage 2: Main Dashboard (Hidden initially) -->
+    <div id="dashboardApp" class="dashboard-container hidden">
+
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar glass-panel">
+            <div class="sidebar-header">
+                <h3>Session Status</h3>
+                <span id="activeSessionPill" class="status-pill">No Session</span>
+            </div>
+            <nav class="side-nav">
+                <button class="nav-item active" data-target="view-overview">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="3" y="3" width="7" height="7"></rect>
+                        <rect x="14" y="3" width="7" height="7"></rect>
+                        <rect x="14" y="14" width="7" height="7"></rect>
+                        <rect x="3" y="14" width="7" height="7"></rect>
+                    </svg>
+                    Overview
+                </button>
+                <button class="nav-item" data-target="view-identities">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                        <circle cx="9" cy="7" r="4"></circle>
+                        <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                        <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                    </svg>
+                    Identities
+                </button>
+                <button class="nav-item" data-target="view-map">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"></polygon>
+                    </svg>
+                    2D Embedding Map
+                </button>
+                <button class="nav-item btn-danger-outline" style="margin-top:auto;" id="btnDeleteSession">
+                    Delete Session
+                </button>
+            </nav>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="content-area">
+
+            <!-- View: OVERVIEW (Metrics) -->
+            <section id="view-overview" class="admin-view active-view">
+                <div class="view-header">
+                    <h2>Session Overview</h2>
+                </div>
+
+                <div class="metrics-grid">
+                    <div class="metric-card glass-panel">
+                        <div class="metric-icon blue">👥</div>
+                        <div class="metric-data">
+                            <h3 id="statTotalFaces">0</h3>
+                            <p>Unique Identities</p>
+                        </div>
+                    </div>
+                    <div class="metric-card glass-panel">
+                        <div class="metric-icon purple">🧠</div>
+                        <div class="metric-data">
+                            <h3 id="statTotalEmbeddings">0</h3>
+                            <p>Total Embeddings Indexed</p>
+                        </div>
+                    </div>
+                    <div class="metric-card glass-panel">
+                        <div class="metric-icon green">🕒</div>
+                        <div class="metric-data">
+                            <h3 id="statSessionAge">0h</h3>
+                            <p>Session Uptime</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- View: IDENTITIES (Table & Editor) -->
+            <section id="view-identities" class="admin-view hidden">
+                <div class="view-header">
+                    <h2>Manage Identities</h2>
+                    <div class="header-actions">
+                        <button id="btnRefreshFaces" class="btn secondary">Refresh</button>
+                    </div>
+                </div>
+
+                <div class="glass-panel main-panel">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Thumbnail</th>
+                                <th>ReID</th>
+                                <th>Name</th>
+                                <th>Tracking Data</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="facesTableBody">
+                            <!-- Populated via JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- View: 2D MAP (Scatter Plot) -->
+            <section id="view-map" class="admin-view hidden">
+                <div class="view-header">
+                    <h2>2D Embedding Space</h2>
+                    <p class="subtitle">Visualizing the FAISS 512D hyperspace projected to 2D using PCA computation.</p>
+                </div>
+
+                <div class="glass-panel main-panel chart-container">
+                    <canvas id="pcaChart"></canvas>
+                </div>
+            </section>
+
+        </main>
+    </div>
+
+    <!-- Modals -->
+    <div id="mergeModal" class="modal-backdrop hidden">
+        <div class="modal glass-panel">
+            <h3>Merge Identity</h3>
+            <p>Merge <strong id="mergeFromName">Unknown</strong> (ReID: <span id="mergeFromId"></span>) into another
+                identity.</p>
+
+            <div class="form-group">
+                <label>Target Identity (ReID)</label>
+                <select id="mergeTargetSelect" class="styled-select">
+                    <!-- Populated via JS -->
+                </select>
+                <small>Warning: This action will reassign all embeddings and cannot be easily undone.</small>
+            </div>
+
+            <div class="modal-actions">
+                <button id="btnCancelMerge" class="btn text-btn">Cancel</button>
+                <button id="btnConfirmMerge" class="btn primary danger">Confirm Merge</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="admin.js"></script>
+</body>
+
+</html>

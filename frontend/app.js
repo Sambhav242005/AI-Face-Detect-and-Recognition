@@ -765,11 +765,18 @@ async function runInference() {
                     await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
 
                     const embedding = await getFaceEmbedding(faceImg);
+                    const image_b64 = tmpSquare.toDataURL('image/jpeg', 0.7);
 
                     const res = await fetch(`${API}/api/face/query`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ embedding, session_id: currentSessionId, track_id: tid, known_reid: face.reid }),
+                        body: JSON.stringify({
+                            embedding,
+                            session_id: currentSessionId,
+                            track_id: tid,
+                            known_reid: face.reid,
+                            image_b64
+                        }),
                     });
                     const data = await res.json();
                     if (trackedFaces.has(tid)) {
@@ -1120,12 +1127,19 @@ DOM.btnSaveIdentity.addEventListener('click', async () => {
 
         const faceImgData = faceCtx.getImageData(0, 0, 112, 112);
         const embedding = await getFaceEmbedding(faceImgData);
+        const image_b64 = faceCanvas.toDataURL('image/jpeg', 0.9);
 
         // Save to DB
         const res = await fetch(`${API}/api/face/query`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ embedding, session_id: currentSessionId, track_id: "upload", known_reid: null }),
+            body: JSON.stringify({
+                embedding,
+                session_id: currentSessionId,
+                track_id: "upload",
+                known_reid: null,
+                image_b64
+            }),
         });
         const data = await res.json();
 
