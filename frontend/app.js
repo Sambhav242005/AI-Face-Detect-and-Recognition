@@ -32,6 +32,14 @@ const DOM = {
     progressBar: document.getElementById('progressBar'),
     debugConsole: document.getElementById('debugConsole'),
     modelSelector: document.getElementById('modelSelector'),
+    // Crop Modal Elements
+    cropModal: document.getElementById('cropModal'),
+    cropContainer: document.getElementById('cropContainer'),
+    cropImage: document.getElementById('cropImage'),
+    cropBox: document.getElementById('cropBox'),
+    cropNameInput: document.getElementById('cropNameInput'),
+    btnCancelCrop: document.getElementById('btnCancelCrop'),
+    btnSaveIdentity: document.getElementById('btnSaveIdentity')
 };
 
 const ctx = DOM.canvas.getContext('2d');
@@ -62,6 +70,25 @@ const IOU_THRESHOLD = 0.15; // from botsort.yaml track_low_thresh
 
 // Embedding throttle per face
 const EMBEDDING_INTERVAL = 5; // query DB every N inference runs per track
+
+// ─── Crop Modal State ──────────────────────────────────────────────────────
+let cropState = {
+    active: false,
+    uploadedImage: null,
+    isDragging: false,
+    isResizing: false,
+    resizeHandle: null,
+    startX: 0,
+    startY: 0,
+    boxX: 0,
+    boxY: 0,
+    boxW: 100,
+    boxH: 100,
+    imgX: 0,
+    imgY: 0,
+    imgW: 0,
+    imgH: 0
+};
 
 // ─── Loading / Boot ────────────────────────────────────────────────────────
 
@@ -134,7 +161,7 @@ async function waitForBackend() {
 // ─── ONNX Model Loading ───────────────────────────────────────────────────
 
 async function loadYOLO() {
-    const providers = ['webgpu', 'wasm'];
+    const providers = ['webgpu', 'webgl', 'wasm'];
     for (const ep of providers) {
         try {
             yoloSession = await ort.InferenceSession.create('./models/yolo-face.onnx', {
@@ -154,7 +181,7 @@ async function loadYOLO() {
 
 async function loadFaceNet(modelName) {
     const modelPath = `./models/${modelName}.onnx`;
-    const providers = ['webgpu', 'wasm'];
+    const providers = ['webgpu', 'webgl', 'wasm'];
     for (const ep of providers) {
         try {
             // Disable optimizations for WebGPU to dodge graph fusion bugs
@@ -851,49 +878,250 @@ async function processUploadedImage(img) {
         // 4. Postprocess YOLO
         const detections = postprocessYOLO(output, yoloScale, padX, padY, cw, ch, 0.45);
 
-        if (detections.length === 0) {
-            alert("No faces detected in the uploaded image.");
-            DOM.status.textContent = `Running (${executionProvider.toUpperCase()})`;
-            return;
-        }
+        let initialBox = null;
 
-        // 5. Get largest face
-        let largestFace = detections[0];
-        let maxArea = 0;
-        for (const det of detections) {
-            const area = (det.x2 - det.x1) * (det.y2 - det.y1);
-            if (area > maxArea) {
-                maxArea = area;
-                largestFace = det;
+        if (detections.length > 0) {
+            // Get largest face
+            let largestFace = detections[0];
+            let maxArea = 0;
+            for (const det of detections) {
+                const area = (det.x2 - det.x1) * (det.y2 - det.y1);
+                if (area > maxArea) {
+                    maxArea = area;
+                    largestFace = det;
+                }
             }
+            initialBox = {
+                x1: largestFace.x1 / scale,
+                y1: largestFace.y1 / scale,
+                x2: largestFace.x2 / scale,
+                y2: largestFace.y2 / scale
+            };
         }
 
-        // 6. Extract & Embed
-        const fCx = (largestFace.x1 + largestFace.x2) / 2;
-        const fCy = (largestFace.y1 + largestFace.y2) / 2;
-        let bw = largestFace.x2 - largestFace.x1;
-        let bh = largestFace.y2 - largestFace.y1;
+        // 5. Open Modal instead of automatic embedding
+        openCropModal(img, initialBox);
 
-        let side = Math.max(bw, bh) * 1.1;
-        const shiftY = side * 0.05;
+    } catch (e) {
+        console.error(e);
+        alert("Error processing image: " + e.message);
+        DOM.status.textContent = `Running (${executionProvider.toUpperCase()})`;
+    } finally {
+        DOM.imageUpload.value = ''; // reset file input
+    }
+}
 
-        const x1 = Math.floor(fCx - side / 2);
-        const y1 = Math.floor((fCy - shiftY) - side / 2);
-        const w = Math.ceil(side);
-        const h = Math.ceil(side);
+// ─── Crop Modal Logic ──────────────────────────────────────────────────────
 
+function openCropModal(img, faceBox) {
+    cropState.active = true;
+    cropState.uploadedImage = img;
+    DOM.cropNameInput.value = '';
+
+    // Show modal
+    DOM.cropModal.classList.remove('hidden');
+
+    const initCropMath = () => {
+        const containerRect = DOM.cropContainer.getBoundingClientRect();
+        const imgRect = DOM.cropImage.getBoundingClientRect();
+
+        // Save image rendered boundaries relative to container
+        cropState.imgX = imgRect.left - containerRect.left;
+        cropState.imgY = imgRect.top - containerRect.top;
+        cropState.imgW = imgRect.width;
+        cropState.imgH = imgRect.height;
+
+        const scaleX = cropState.imgW / img.width;
+        const scaleY = cropState.imgH / img.height;
+
+        if (faceBox) {
+            // Convert YOLO face box to rendered modal coords
+            const fCx = (faceBox.x1 + faceBox.x2) / 2;
+            const fCy = (faceBox.y1 + faceBox.y2) / 2;
+            let bw = faceBox.x2 - faceBox.x1;
+            let bh = faceBox.y2 - faceBox.y1;
+
+            let side = Math.max(bw, bh) * 1.1; // Match 1.1x scaling of webcam feed exactly
+            const shiftY = side * 0.05;
+
+            cropState.boxW = side * scaleX;
+            cropState.boxH = side * scaleY;
+            cropState.boxX = cropState.imgX + (fCx * scaleX) - (cropState.boxW / 2);
+            cropState.boxY = cropState.imgY + ((fCy - shiftY) * scaleY) - (cropState.boxH / 2);
+        } else {
+            // Default center crop
+            cropState.boxW = Math.min(cropState.imgW, cropState.imgH) * 0.5;
+            cropState.boxH = cropState.boxW;
+            cropState.boxX = cropState.imgX + (cropState.imgW / 2) - (cropState.boxW / 2);
+            cropState.boxY = cropState.imgY + (cropState.imgH / 2) - (cropState.boxH / 2);
+        }
+
+        clampCropBox();
+        updateCropBoxUI();
+    };
+
+    // Ensure image is fully rendered before calculating sizes
+    DOM.cropImage.src = img.src;
+    if (DOM.cropImage.complete) {
+        setTimeout(initCropMath, 10);
+    } else {
+        DOM.cropImage.onload = initCropMath;
+    }
+}
+
+function updateCropBoxUI() {
+    DOM.cropBox.style.left = `${cropState.boxX}px`;
+    DOM.cropBox.style.top = `${cropState.boxY}px`;
+    DOM.cropBox.style.width = `${cropState.boxW}px`;
+    DOM.cropBox.style.height = `${cropState.boxH}px`;
+}
+
+function clampCropBox() {
+    const maxSide = Math.min(cropState.imgW, cropState.imgH);
+    if (cropState.boxW > maxSide) cropState.boxW = maxSide;
+    if (cropState.boxH > maxSide) cropState.boxH = maxSide;
+
+    if (cropState.boxW < 40) cropState.boxW = 40;
+
+    // Force square for EdgeFace
+    cropState.boxH = cropState.boxW;
+
+    // Prevent dragging out of bounds
+    if (cropState.boxX < cropState.imgX) cropState.boxX = cropState.imgX;
+    if (cropState.boxY < cropState.imgY) cropState.boxY = cropState.imgY;
+    if (cropState.boxX + cropState.boxW > cropState.imgX + cropState.imgW) {
+        cropState.boxX = cropState.imgX + cropState.imgW - cropState.boxW;
+    }
+    if (cropState.boxY + cropState.boxH > cropState.imgY + cropState.imgH) {
+        cropState.boxY = cropState.imgY + cropState.imgH - cropState.boxH;
+    }
+}
+
+// Mouse/Touch Events for Crop Box
+DOM.cropContainer.addEventListener('mousedown', startCropInteraction);
+window.addEventListener('mousemove', moveCropInteraction);
+window.addEventListener('mouseup', endCropInteraction);
+
+DOM.cropContainer.addEventListener('touchstart', startCropInteraction, { passive: false });
+window.addEventListener('touchmove', moveCropInteraction, { passive: false });
+window.addEventListener('touchend', endCropInteraction);
+
+function getEventPos(e) {
+    if (e.touches && e.touches.length > 0) {
+        return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    }
+    return { x: e.clientX, y: e.clientY };
+}
+
+function startCropInteraction(e) {
+    if (!cropState.active) return;
+
+    const target = e.target;
+    const pos = getEventPos(e);
+
+    if (target.classList.contains('crop-handle')) {
+        cropState.isResizing = true;
+        cropState.resizeHandle = target.className.split(' ').find(c => ['nw', 'ne', 'sw', 'se'].includes(c));
+        e.preventDefault();
+    } else if (target.closest('#cropBox')) {
+        cropState.isDragging = true;
+        e.preventDefault();
+    } else {
+        return;
+    }
+
+    cropState.startX = pos.x;
+    cropState.startY = pos.y;
+    cropState.initialBoxX = cropState.boxX;
+    cropState.initialBoxY = cropState.boxY;
+    cropState.initialBoxW = cropState.boxW;
+    cropState.initialBoxH = cropState.boxH;
+}
+
+function moveCropInteraction(e) {
+    if (!cropState.isDragging && !cropState.isResizing) return;
+    e.preventDefault(); // Stop scrolling while dragging
+
+    const pos = getEventPos(e);
+    const dx = pos.x - cropState.startX;
+    const dy = pos.y - cropState.startY;
+
+    if (cropState.isDragging) {
+        cropState.boxX = cropState.initialBoxX + dx;
+        cropState.boxY = cropState.initialBoxY + dy;
+    } else if (cropState.isResizing) {
+        // Uniform diagonal scaling from opposite corner
+        let delta;
+        if (cropState.resizeHandle === 'se') {
+            delta = (dx + dy) / 2;
+            cropState.boxW = cropState.initialBoxW + delta;
+        } else if (cropState.resizeHandle === 'nw') {
+            delta = -(dx + dy) / 2;
+            cropState.boxW = cropState.initialBoxW + delta;
+            cropState.boxX = cropState.initialBoxX - delta;
+            cropState.boxY = cropState.initialBoxY - delta;
+        } else if (cropState.resizeHandle === 'ne') {
+            delta = (dx - dy) / 2;
+            cropState.boxW = cropState.initialBoxW + delta;
+            cropState.boxY = cropState.initialBoxY - delta;
+        } else if (cropState.resizeHandle === 'sw') {
+            delta = (-dx + dy) / 2;
+            cropState.boxW = cropState.initialBoxW + delta;
+            cropState.boxX = cropState.initialBoxX - delta;
+        }
+    }
+
+    clampCropBox();
+    updateCropBoxUI();
+}
+
+function endCropInteraction() {
+    cropState.isDragging = false;
+    cropState.isResizing = false;
+    cropState.resizeHandle = null;
+}
+
+DOM.btnCancelCrop.addEventListener('click', () => {
+    DOM.cropModal.classList.add('hidden');
+    cropState.active = false;
+    DOM.status.textContent = `Running (${executionProvider.toUpperCase()})`;
+});
+
+DOM.btnSaveIdentity.addEventListener('click', async () => {
+    const name = DOM.cropNameInput.value.trim();
+    if (!name) return alert('Please enter a name for this identity.');
+
+    DOM.btnSaveIdentity.disabled = true;
+    DOM.btnSaveIdentity.textContent = 'Saving...';
+
+    try {
+        // Extract crop region
+        const scaleX = cropState.uploadedImage.width / cropState.imgW;
+        const scaleY = cropState.uploadedImage.height / cropState.imgH;
+
+        const srcX = (cropState.boxX - cropState.imgX) * scaleX;
+        const srcY = (cropState.boxY - cropState.imgY) * scaleY;
+        const srcW = cropState.boxW * scaleX;
+        const srcH = cropState.boxH * scaleY;
+
+        // Draw to FaceNet canvas directly (112x112)
         const faceCanvas = document.createElement('canvas');
-        faceCanvas.width = w;
-        faceCanvas.height = h;
+        faceCanvas.width = 112;
+        faceCanvas.height = 112;
         const faceCtx = faceCanvas.getContext('2d');
         faceCtx.fillStyle = '#000000';
-        faceCtx.fillRect(0, 0, w, h);
-        faceCtx.drawImage(c, x1, y1, w, h, 0, 0, w, h);
+        faceCtx.fillRect(0, 0, 112, 112);
 
-        const faceImgData = faceCtx.getImageData(0, 0, w, h);
+        faceCtx.drawImage(
+            cropState.uploadedImage,
+            srcX, srcY, srcW, srcH,
+            0, 0, 112, 112
+        );
+
+        const faceImgData = faceCtx.getImageData(0, 0, 112, 112);
         const embedding = await getFaceEmbedding(faceImgData);
 
-        // 7. Query DB
+        // Save to DB
         const res = await fetch(`${API}/api/face/query`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -901,18 +1129,36 @@ async function processUploadedImage(img) {
         });
         const data = await res.json();
 
-        let msg = `Face Identified!\nName: ${data.name || 'Unknown'}\nReID: ${data.reid || 'None'}`;
-        if (data.distance) msg += `\nSimilarity: ${(data.distance * 100).toFixed(1)}%`;
-        alert(msg);
+        // Apply Name
+        if (data.reid !== null && data.reid !== undefined) {
+            const updateRes = await fetch(`${API}/api/face/update`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ reid: data.reid, name: name }),
+            });
+            const updateData = await updateRes.json();
+            if (updateData.status === 'success') {
+                alert(`Identity Verified & Saved!\nName: ${name}\nReID: ${data.reid}`);
 
+                // Update live side panel if this reid is currently on screen
+                for (const [, f] of trackedFaces) {
+                    if (f.reid === data.reid) f.name = name;
+                }
+                updateSidePanel();
+            }
+        }
+
+        DOM.cropModal.classList.add('hidden');
+        cropState.active = false;
     } catch (e) {
         console.error(e);
-        alert("Error processing image: " + e.message);
+        alert('Failed to save identity: ' + e.message);
     } finally {
+        DOM.btnSaveIdentity.disabled = false;
+        DOM.btnSaveIdentity.textContent = 'Save Identity';
         DOM.status.textContent = `Running (${executionProvider.toUpperCase()})`;
-        DOM.imageUpload.value = ''; // reset file input
     }
-}
+});
 
 // Needed because extractCanvas is hardcoded in original preprocessYOLO
 function preprocessYOLO_custom(sourceCanvas, srcW, srcH) {

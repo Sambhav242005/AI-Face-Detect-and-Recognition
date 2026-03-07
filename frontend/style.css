@@ -448,3 +448,172 @@ h3 {
     border-color: var(--neon);
     color: var(--neon);
 }
+
+/* ─── Crop Modal ─────────────────────────────────────────────────────────── */
+
+.hidden {
+    display: none !important;
+}
+
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    background: rgba(15, 23, 42, 0.9);
+    backdrop-filter: blur(8px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    animation: fadeIn 0.3s ease forwards;
+}
+
+@keyframes fadeIn {
+    to {
+        opacity: 1;
+    }
+}
+
+.modal-content {
+    width: 90%;
+    max-width: 500px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 30px;
+    background: linear-gradient(145deg, #1e293b, #0f172a);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 20px;
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.8), 0 0 20px rgba(34, 211, 238, 0.15);
+    transform: scale(0.95) translateY(20px);
+    animation: popUp 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+}
+
+@keyframes popUp {
+    to {
+        transform: scale(1) translateY(0);
+    }
+}
+
+.modal-content h2 {
+    font-size: 1.6rem;
+    color: var(--text);
+    margin-bottom: 4px;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+}
+
+.modal-subtitle {
+    font-size: 0.9rem;
+    color: var(--text-muted);
+    margin-bottom: 12px;
+}
+
+.crop-container {
+    position: relative;
+    width: 100%;
+    height: 320px;
+    background: #000;
+    border-radius: 12px;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.8);
+    /* Prevent text selection during drag */
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+#cropImage {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    display: block;
+    /* Don't allow drag image natively */
+    pointer-events: none;
+}
+
+.crop-box {
+    position: absolute;
+    border: 2px solid var(--neon);
+    box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.75), 0 0 15px var(--neon);
+    cursor: move;
+    box-sizing: border-box;
+    background: rgba(255, 255, 255, 0.01);
+    /* Ensures draggable surface inside */
+}
+
+.crop-box::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border: 1px dashed rgba(255, 255, 255, 0.5);
+    pointer-events: none;
+}
+
+.crop-handle {
+    position: absolute;
+    width: 16px;
+    height: 16px;
+    background: var(--neon);
+    border: 2px solid #000;
+    border-radius: 50%;
+    z-index: 10;
+}
+
+/* Invisible hit area expansion for touch */
+.crop-handle::before {
+    content: '';
+    position: absolute;
+    inset: -15px;
+    border-radius: 50%;
+    background: transparent;
+}
+
+.crop-handle.nw {
+    top: -8px;
+    left: -8px;
+    cursor: nwse-resize;
+}
+
+.crop-handle.ne {
+    top: -8px;
+    right: -8px;
+    cursor: nesw-resize;
+}
+
+.crop-handle.sw {
+    bottom: -8px;
+    left: -8px;
+    cursor: nesw-resize;
+}
+
+.crop-handle.se {
+    bottom: -8px;
+    right: -8px;
+    cursor: nwse-resize;
+}
+
+.modal-form {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    margin-top: 8px;
+}
+
+.modal-form label {
+    font-size: 0.9rem;
+    color: var(--text-muted);
+    font-weight: 500;
+    margin-bottom: 6px;
+    display: block;
+}
+
+.modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+    margin-top: 10px;
+}

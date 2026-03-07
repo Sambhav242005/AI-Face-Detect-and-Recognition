@@ -98,8 +98,38 @@
         </main>
     </div>
 
+    <!-- Crop Modal -->
+    <div id="cropModal" class="modal-overlay hidden">
+        <div class="glass-panel modal-content">
+            <h2>Add Identity</h2>
+            <p class="modal-subtitle">Crop the face and provide a name.</p>
+
+            <div class="crop-container" id="cropContainer">
+                <img id="cropImage" src="" alt="Image to crop">
+                <div id="cropBox" class="crop-box">
+                    <div class="crop-handle nw"></div>
+                    <div class="crop-handle ne"></div>
+                    <div class="crop-handle sw"></div>
+                    <div class="crop-handle se"></div>
+                </div>
+            </div>
+
+            <div class="modal-form">
+                <div class="input-group full-width">
+                    <label for="cropNameInput">Name for this person:</label>
+                    <input type="text" id="cropNameInput" placeholder="e.g. John Doe" class="full-width">
+                </div>
+
+                <div class="modal-actions">
+                    <button id="btnCancelCrop" class="btn outline">Cancel</button>
+                    <button id="btnSaveIdentity" class="btn primary">Save Identity</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/ort.all.min.js"></script>
-    <script src="app.js?v=3"></script>
+    <script src="app.js?v=4"></script>
 </body>
 
 </html>
