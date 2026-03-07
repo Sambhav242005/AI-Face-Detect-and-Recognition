@@ -6,6 +6,7 @@ import time
 import numpy as np
 import faiss
 import threading
+import base64
 from typing import Optional, Tuple
 
 
@@ -166,9 +167,37 @@ class SessionDBManager:
 
             self.metadata.append({"reid_num": reid_num, "name": name, "key": key})
             self.reid_name_map[key] = name
-
+            
             self._save_session()
             return reid_num
+
+    def save_face_image(self, reid_num: int, image_b64: str, is_expansion: bool = False):
+        """Save a cropped face image to disk."""
+        if not self.active_session_id or not image_b64:
+            return
+            
+        try:
+            # Create directory for this identity
+            face_dir = os.path.join(self.base_dir, self.active_session_id, "faces", str(reid_num))
+            os.makedirs(face_dir, exist_ok=True)
+            
+            # Generate filename
+            filename = f"{uuid.uuid4().hex[:8]}.jpg"
+            if not is_expansion:
+                filename = f"primary_{filename}"
+                
+            file_path = os.path.join(face_dir, filename)
+            
+            # Decode and save
+            # Handle potential Data URI prefix (data:image/jpeg;base64,...)
+            if "," in image_b64:
+                image_b64 = image_b64.split(",")[1]
+                
+            image_data = base64.b64decode(image_b64)
+            with open(file_path, "wb") as f:
+                f.write(image_data)
+        except Exception as e:
+            print(f"Failed to save face image: {e}")
 
     def update_name(self, reid_num: int, new_name: str) -> bool:
         with self._lock:
@@ -217,7 +246,7 @@ class SessionDBManager:
                     return m["name"]
             return f"Person_{reid_num}"
 
-    def expand_face(self, reid_num: int, embedding, name: str):
+    def expand_face(self, reid_num: int, embedding, name: str, image_b64: Optional[str] = None):
         """Add a new embedding variant for an existing identity if it's sufficiently novel."""
         with self._lock:
             if self.index is None or self.index.ntotal == 0:
@@ -237,6 +266,126 @@ class SessionDBManager:
                     self.metadata.append({"reid_num": reid_num, "name": name, "key": new_key})
                     self.reid_name_map[new_key] = name
                     self._save_session()
+                    
+                    if image_b64:
+                        self.save_face_image(reid_num, image_b64, is_expansion=True)
+                        
                     print(f"Profile expanded for {name} (reid {reid_num}). Novelty sim: {sim:.4f}")
             except Exception as e:
                 print(f"DB expand error: {e}")
+                
+    def get_all_faces_with_images(self) -> list:
+        """Get all known identities and a list of their saved cropped images."""
+        result = []
+        with self._lock:
+            if not self.active_session_id:
+                return result
+                
+            for m in self.metadata:
+                reid = m["reid_num"]
+                name = m["name"]
+                
+                # Look for images
+                images = []
+                face_dir = os.path.join(self.base_dir, self.active_session_id, "faces", str(reid))
+                if os.path.exists(face_dir):
+                    images = [f for f in os.listdir(face_dir) if f.endswith('.jpg')]
+                    
+                result.append({
+                    "reid": reid,
+                    "name": name,
+                    "images": images,
+                    "total_embeddings": 1 # we can count duplicates later if needed
+                })
+        return result
+
+    def get_pca_map(self) -> list:
+        """Extract all embeddings from the FAISS index and project them to 2D using PCA."""
+        with self._lock:
+            if self.index is None or self.index.ntotal == 0:
+                return []
+                
+            try:
+                from sklearn.decomposition import PCA
+                
+                # Extract all vectors from the IndexFlatIP
+                n_total = self.index.ntotal
+                
+                # For IndexFlatIP, we can directly reconstruct vectors
+                # reconstruct_n(0, n) gets vectors from 0 to n
+                vectors = np.zeros((n_total, self.EMBED_DIM), dtype=np.float32)
+                for i in range(n_total):
+                    vectors[i] = self.index.reconstruct(i)
+                
+                # If we have less than 2 vectors, PCA 2D won't work
+                if n_total < 2:
+                    return [{"x": 0.0, "y": 0.0, "reid": self.metadata[0]["reid_num"], "name": self.metadata[0]["name"]}]
+                    
+                # Calculate PCA (reduce 512D to 2D)
+                pca = PCA(n_components=2)
+                coords_2d = pca.fit_transform(vectors)
+                
+                # Map back to identities
+                result = []
+                for i in range(n_total):
+                    meta = self.metadata[i]
+                    result.append({
+                        "x": float(coords_2d[i][0]),
+                        "y": float(coords_2d[i][1]),
+                        "reid": meta["reid_num"],
+                        "name": meta["name"]
+                    })
+                    
+                return result
+            except Exception as e:
+                print(f"PCA generation error: {e}")
+                return []
+
+    def delete_face(self, reid_num: int) -> bool:
+        """Delete an identity completely (removes from metadata and rebuilds FAISS index)."""
+        with self._lock:
+            if self.index is None:
+                return False
+                
+            # Filter metadata
+            new_metadata = [m for m in self.metadata if m["reid_num"] != reid_num]
+            
+            if len(new_metadata) == len(self.metadata):
+                return False # Nothing removed
+                
+            # Unfortunately, FAISS IndexFlatIP doesn't easily support targeted deletion by ID.
+            # We must rebuild the index from the remaining metadata embeddings.
+            
+            # 1. Extract keeping embeddings based on index
+            keep_indices = [i for i, m in enumerate(self.metadata) if m["reid_num"] != reid_num]
+            
+            if not keep_indices:
+                # We deleted everyone
+                self.index = faiss.IndexFlatIP(self.EMBED_DIM)
+            else:
+                n_total = self.index.ntotal
+                new_index = faiss.IndexFlatIP(self.EMBED_DIM)
+                
+                for i in range(n_total):
+                    if i in keep_indices:
+                        vec = self.index.reconstruct(i)
+                        new_index.add(vec.reshape(1, -1))
+                        
+                self.index = new_index
+                
+            # Update state
+            self.metadata = new_metadata
+            self.reid_name_map = {m["key"]: m["name"] for m in self.metadata}
+            
+            # Clean up images
+            if self.active_session_id:
+                face_dir = os.path.join(self.base_dir, self.active_session_id, "faces", str(reid_num))
+                if os.path.exists(face_dir):
+                    try:
+                        import shutil
+                        shutil.rmtree(face_dir)
+                    except:
+                        pass
+            
+            self._save_session()
+            return True

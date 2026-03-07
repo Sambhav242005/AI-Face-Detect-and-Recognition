@@ -1,12 +1,27 @@
-from fastapi import FastAPI
+import os
+from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import APIKeyHeader
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from session_db import SessionDBManager
 import uvicorn
 from download_models import ensure_models_exist
 import asyncio
+
+# Security configuration
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
+ADMIN_TOKEN = "forge-admin-secure-session" # Static token for simplicity
+header_scheme = APIKeyHeader(name="X-Admin-Token", auto_error=False)
+
+async def verify_admin(token: str = Depends(header_scheme)):
+    if token != ADMIN_TOKEN:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unauthorized admin access"
+        )
+    return True
 
 app = FastAPI()
 
@@ -38,7 +53,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-db = SessionDBManager()
+import os
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sessions_dir = os.path.join(current_dir, "sessions")
+os.makedirs(sessions_dir, exist_ok=True)
+
+db = SessionDBManager(base_dir=sessions_dir)
 db.create_new_session()
 
 # ─── Health ─────────────────────────────────────────────────────────────────
@@ -46,6 +66,14 @@ db.create_new_session()
 @app.get("/api/health")
 async def health_check():
     return {"status": "ok"}
+
+@app.post("/api/admin/login")
+async def admin_login(data: dict):
+    password = data.get("password")
+    if password == ADMIN_PASSWORD:
+        return {"status": "success", "token": ADMIN_TOKEN}
+    else:
+        raise HTTPException(status_code=401, detail="Invalid password")
 
 # ─── Session ────────────────────────────────────────────────────────────────
 
@@ -59,7 +87,7 @@ async def load_session(session_id: str):
     success = db.load_session(session_id)
     return {"status": "success" if success else "error"}
 
-@app.delete("/api/session/{session_id}")
+@app.delete("/api/session/{session_id}", dependencies=[Depends(verify_admin)])
 async def delete_session(session_id: str):
     success = db.delete_session(session_id)
     return {"status": "success" if success else "error"}
@@ -72,6 +100,7 @@ async def query_face(data: dict):
     embedding = data.get("embedding")
     track_id = data.get("track_id", -1)
     known_reid = data.get("known_reid")
+    image_b64 = data.get("image_b64")
     
     if embedding is None:
         return {"reid": None, "name": None}
@@ -110,7 +139,7 @@ async def query_face(data: dict):
         # CRITICAL FIX: Only expand if `best_reid` is actually this person, AND similarity is high enough
         # to guarantee it's them. (0.65 -> 0.85). If it's < 0.65, we don't trust the tracker enough to poison the DB.
         if best_reid == known_reid and similarity is not None and 0.65 <= similarity < 0.85:
-            db.expand_face(known_reid, embedding, known_name)
+            db.expand_face(known_reid, embedding, known_name, image_b64=image_b64)
         
         return {"reid": known_reid, "name": known_name, "distance": similarity}
     
@@ -120,6 +149,10 @@ async def query_face(data: dict):
             new_reid = db.add_face(embedding, "Unknown")
             final_name = f"Person_{new_reid}"
             db.update_name(new_reid, final_name)
+            
+            if image_b64:
+                db.save_face_image(new_reid, image_b64, is_expansion=False)
+                
             print(f"New face added: reid={new_reid} sim={similarity:.4f} track={track_id}")
             return {"reid": new_reid, "name": final_name, "distance": similarity}
         
@@ -138,9 +171,86 @@ async def update_face(data: dict):
         return {"status": "success"}
     return {"status": "error", "message": "Invalid parameters"}
 
-# ─── Static files (frontend) ───────────────────────────────────────────────
+# ─── Admin Dashboard ────────────────────────────────────────────────────────
 
-app.mount("/", StaticFiles(directory="../frontend", html=True), name="frontend")
+@app.get("/api/admin/sessions", dependencies=[Depends(verify_admin)])
+async def get_all_sessions():
+    """Returns a list of all folders in the sessions directory with metadata."""
+    sessions = []
+    base_dir = "./sessions"
+    if not os.path.exists(base_dir):
+        return {"sessions": []}
+        
+    for dirname in os.listdir(base_dir):
+        session_path = os.path.join(base_dir, dirname)
+        if os.path.isdir(session_path):
+            stat = os.stat(session_path)
+            sessions.append({
+                "id": dirname,
+                "created_at": stat.st_ctime,
+                "updated_at": stat.st_mtime,
+                "is_active": dirname == db.active_session_id
+            })
+            
+    # Sort by newest first
+    sessions.sort(key=lambda x: x["updated_at"], reverse=True)
+    return {"sessions": sessions}
+
+@app.get("/api/admin/session/{session_id}/metrics", dependencies=[Depends(verify_admin)])
+async def get_session_metrics(session_id: str):
+    """Fetch metrics for a specific session."""
+    if session_id != db.active_session_id:
+        return {"error": "Session must be loaded first"}
+        
+    with db._lock:
+        return {
+            "total_faces": len(db.metadata),
+            "total_embeddings": db.index.ntotal if db.index else 0,
+            "session_id": session_id
+        }
+
+@app.get("/api/admin/session/{session_id}/faces", dependencies=[Depends(verify_admin)])
+async def get_session_faces(session_id: str):
+    """List all registered identities and available images in a specific session."""
+    if session_id != db.active_session_id:
+        return {"error": "Session must be loaded first"}
+        
+    faces = db.get_all_faces_with_images()
+    return {"faces": faces}
+
+@app.get("/api/admin/session/{session_id}/map", dependencies=[Depends(verify_admin)])
+async def get_session_pca_map(session_id: str):
+    """Fetch 2D-projected face embeddings for charting."""
+    if session_id != db.active_session_id:
+        return {"error": "Session must be loaded first"}
+        
+    points = db.get_pca_map()
+    return {"points": points}
+
+@app.delete("/api/admin/faces/{reid}", dependencies=[Depends(verify_admin)])
+async def admin_delete_face(reid: int):
+    """Delete a specific identity completely."""
+    success = db.delete_face(reid)
+    return {"status": "success" if success else "error"}
+
+@app.post("/api/admin/faces/merge", dependencies=[Depends(verify_admin)])
+async def admin_merge_faces(data: dict):
+    """Manually merge two ReIDs."""
+    merge_from = data.get("merge_from")
+    merge_to = data.get("merge_to")
+    
+    if merge_from is None or merge_to is None:
+        return {"status": "error", "message": "Missing merge parameters"}
+        
+    success = db.merge_faces(int(merge_from), int(merge_to))
+    return {"status": "success" if success else "error"}
+
+# ─── Static files (frontend & assets) ─────────────────────────────────────
+
+frontend_dir = os.path.join(os.path.dirname(current_dir), "frontend")
+
+app.mount("/sessions", StaticFiles(directory=sessions_dir), name="sessions")
+app.mount("/", StaticFiles(directory=frontend_dir, html=True), name="frontend")
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
