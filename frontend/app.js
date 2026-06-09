@@ -21,6 +21,7 @@ const DOM = {
     btnNew: document.getElementById('btnNewSession'),
     btnLoad: document.getElementById('btnLoadSession'),
     btnDelete: document.getElementById('btnDeleteSession'),
+    btnPause: document.getElementById('btnPauseTracking'),
     btnUploadTrigger: document.getElementById('btnUploadImageTrigger'),
     imageUpload: document.getElementById('imageUpload'),
     inputSession: document.getElementById('sessionInput'),
@@ -59,6 +60,7 @@ let yoloSession = null;
 let faceSession = null;
 let executionProvider = 'wasm'; // will be 'webgpu' if available
 let currentModelName = 'edgeface_xs_gamma_06'; // default EdgeFace model
+let isPaused = false;
 
 // Multi-face tracking state: Map<track_id, {box, reid, name, track_id, embeddingAge}>
 let trackedFaces = new Map();
@@ -115,6 +117,35 @@ function resetTrackingState() {
     closestTrackId = null;
     nextTrackId = 1;
     updateSidePanel();
+}
+
+function setPaused(paused) {
+    isPaused = paused;
+    DOM.btnPause.textContent = isPaused ? 'Resume' : 'Pause';
+    DOM.btnPause.classList.toggle('active', isPaused);
+
+    if (isPaused) {
+        resetTrackingState();
+        DOM.status.textContent = 'Paused';
+        DOM.status.className = 'status-indicator paused';
+        DOM.fps.textContent = 'FPS: Paused';
+        logDebug('Recognition paused');
+    } else {
+        DOM.status.textContent = `Running (${executionProvider.toUpperCase()})`;
+        DOM.status.className = 'status-indicator connected';
+        logDebug('Recognition resumed');
+    }
+}
+
+function drawPauseOverlay() {
+    ctx.save();
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.45)';
+    ctx.fillRect(0, 0, DOM.canvas.width, DOM.canvas.height);
+    ctx.fillStyle = '#f8fafc';
+    ctx.font = 'bold 18px Inter, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Paused', DOM.canvas.width / 2, DOM.canvas.height / 2);
+    ctx.restore();
 }
 
 async function apiFetch(path, options = {}) {
@@ -501,6 +532,10 @@ async function initNetwork() {
         }
     });
 
+    DOM.btnPause.addEventListener('click', () => {
+        setPaused(!isPaused);
+    });
+
     DOM.btnUseClosest.addEventListener('click', () => {
         const face = closestTrackId !== null ? trackedFaces.get(closestTrackId) : null;
         if (face && face.reid !== null) {
@@ -616,6 +651,12 @@ function startRenderLoop() {
         // Draw camera feed
         ctx.drawImage(DOM.webcam, 0, 0, DOM.canvas.width, DOM.canvas.height);
 
+        if (isPaused) {
+            drawPauseOverlay();
+            requestAnimationFrame(frame);
+            return;
+        }
+
         // Draw bounding boxes + labels for ALL tracked faces
         const scaleX = DOM.canvas.width / 640;
         const scaleY = DOM.canvas.height / 480;
@@ -689,6 +730,8 @@ function startRenderLoop() {
 
 async function runInference() {
     try {
+        if (isPaused) return;
+
         // Capture current frame
         extractCtx.drawImage(DOM.webcam, 0, 0, 640, 480);
 
@@ -696,6 +739,8 @@ async function runInference() {
         const { tensor, scale, padX, padY } = preprocessYOLO(null, 640, 480);
         const yoloInputName = yoloSession.inputNames[0];
         const yoloResults = await yoloSession.run({ [yoloInputName]: tensor });
+        if (isPaused) return;
+
         const yoloOutputName = yoloSession.outputNames[0];
         const output = yoloResults[yoloOutputName];
 
@@ -735,6 +780,8 @@ async function runInference() {
 
         // Compute embeddings for each tracked face (throttled per-track)
         for (const [tid, face] of trackedFaces) {
+            if (isPaused) return;
+
             // Throttle queries to avoid saturating GPU/Inference
             if (face.embeddingAge % EMBEDDING_INTERVAL !== 0) {
                 face.embeddingAge++;

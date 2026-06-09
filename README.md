@@ -10,6 +10,7 @@ A client-side AI face tracking and recognition application leveraging WebGPU and
 - **Browser-based AI**: Runs YOLOv8 face detection and EdgeFace face embeddings directly in the browser via WebGPU/WASM ONNX Runtime.
 - **FastAPI Backend**: A lightweight Python backend that acts purely as an API server for the FAISS session database and JSON metadata.
 - **Session Management**: Session persistence and deletion capabilities.
+- **Pause/Resume Tracking**: Pause live recognition without unloading the camera, models, or active session.
 - **Image Identification Tool**: Upload an image to quickly crop and identify a face using the selected session database.
 
 ## Prerequisites

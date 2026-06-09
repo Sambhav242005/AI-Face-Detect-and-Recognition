@@ -108,7 +108,7 @@ Generated from the current checkout on 2026-06-09.
   - Provider fallback order: `webgpu`, `webgl`, `wasm`.
   - Loads `yolo-face.onnx` plus the selected EdgeFace model.
   - Sends `session_id` and `model_name` with face query/update requests.
-  - Runs detection, NMS, IOU tracking, embedding extraction, session actions, identity rename, model switching, and photo crop flow.
+  - Runs detection, NMS, IOU tracking, embedding extraction, pause/resume, session actions, identity rename, model switching, and photo crop flow.
 - `frontend/style.css`: Static app styling for the main panel, controls, video canvas, side panel, debug console, loading overlay, and crop modal.
 
 ### Archive
