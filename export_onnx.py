@@ -4,11 +4,7 @@ Uses akanametov/yolo-face models: https://github.com/akanametov/yolo-face
 Uses otroshi/edgeface models: https://github.com/otroshi/edgeface
 """
 import os
-import ssl
 import urllib.request
-
-# Bypass SSL certificate issues on Windows
-ssl._create_default_https_context = ssl._create_unverified_context
 
 FRONTEND_MODELS_DIR = os.path.join("frontend", "models")
 os.makedirs(FRONTEND_MODELS_DIR, exist_ok=True)

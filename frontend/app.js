@@ -4,7 +4,9 @@
 // Backend is a thin REST API for face DB (FAISS) only.
 // ═══════════════════════════════════════════════════════════════════════════
 
-const API = 'http://localhost:8000';
+const API = window.location.origin && window.location.origin !== 'null'
+    ? window.location.origin
+    : 'http://localhost:8000';
 
 const DOM = {
     webcam: document.getElementById('webcam'),
@@ -105,6 +107,32 @@ function logDebug(msg) {
     el.textContent = `[${time}] ${msg}`;
     DOM.debugConsole.appendChild(el);
     DOM.debugConsole.scrollTop = DOM.debugConsole.scrollHeight;
+}
+
+function resetTrackingState() {
+    trackedFaces.clear();
+    tracks = [];
+    closestTrackId = null;
+    nextTrackId = 1;
+    updateSidePanel();
+}
+
+async function apiFetch(path, options = {}) {
+    const res = await fetch(`${API}${path}`, options);
+    let data = {};
+    try {
+        data = await res.json();
+    } catch (_) {
+        // Keep data as an empty object for non-JSON error responses.
+    }
+    if (!res.ok || data.status === 'error') {
+        throw new Error(data.detail || data.message || `Request failed (${res.status})`);
+    }
+    return data;
+}
+
+function modelQueryParam() {
+    return `model_name=${encodeURIComponent(currentModelName)}`;
 }
 
 async function boot() {
@@ -428,31 +456,32 @@ function updateTracker(detections) {
 // ─── Network / Session ─────────────────────────────────────────────────────
 
 async function initNetwork() {
-    const res = await fetch(`${API}/api/session/new`);
-    const data = await res.json();
+    const data = await apiFetch(`/api/session/new?${modelQueryParam()}`);
     currentSessionId = data.session_id;
     DOM.activeSession.textContent = currentSessionId;
 
     DOM.btnNew.addEventListener('click', async () => {
-        const res = await fetch(`${API}/api/session/new`);
-        const data = await res.json();
-        currentSessionId = data.session_id;
-        DOM.activeSession.textContent = currentSessionId;
-        // Reset tracking state visually if needed, but trackedFaces will be cleared by interval if inference doesn't find them
-        updateSidePanel();
+        try {
+            const data = await apiFetch(`/api/session/new?${modelQueryParam()}`);
+            currentSessionId = data.session_id;
+            DOM.activeSession.textContent = currentSessionId;
+            resetTrackingState();
+        } catch (e) {
+            alert(`Failed to create session: ${e.message}`);
+        }
     });
 
     DOM.btnLoad.addEventListener('click', async () => {
         const id = DOM.inputSession.value.trim();
         if (!id) return alert('Enter a Session ID first');
-        const res = await fetch(`${API}/api/session/load/${id}`);
-        const data = await res.json();
-        if (data.status === 'success') {
+        try {
+            const data = await apiFetch(`/api/session/load/${encodeURIComponent(id)}?${modelQueryParam()}`);
             currentSessionId = id;
             DOM.activeSession.textContent = currentSessionId;
-            alert('Session loaded!');
-        } else {
-            alert('Failed to load session.');
+            resetTrackingState();
+            alert(`Session loaded (${data.model_name}).`);
+        } catch (e) {
+            alert(`Failed to load session: ${e.message}`);
         }
     });
 
@@ -461,22 +490,14 @@ async function initNetwork() {
         if (!confirm('Are you sure you want to permanently delete this session? This action cannot be undone.')) return;
 
         try {
-            const res = await fetch(`${API}/api/session/${currentSessionId}`, { method: 'DELETE' });
-            const data = await res.json();
-            if (data.status === 'success') {
-                alert('Session deleted successfully.');
-                currentSessionId = null;
-                DOM.activeSession.textContent = 'None';
-                trackedFaces.clear();
-                tracks = [];
-                nextTrackId = 1;
-                updateSidePanel();
-            } else {
-                alert('Failed to delete session.');
-            }
+            await apiFetch(`/api/session/${encodeURIComponent(currentSessionId)}`, { method: 'DELETE' });
+            alert('Session deleted successfully.');
+            currentSessionId = null;
+            DOM.activeSession.textContent = 'None';
+            resetTrackingState();
         } catch (e) {
             console.error(e);
-            alert('Error deleting session.');
+            alert(`Error deleting session: ${e.message}`);
         }
     });
 
@@ -497,14 +518,14 @@ async function initNetwork() {
         const reid = reidVal !== '' ? parseInt(reidVal) : (face ? face.reid : null);
 
         if (!name) return alert('Please enter a name.');
+        if (!currentSessionId) return alert('No active session.');
         if (reid === null || reid === undefined || isNaN(reid)) return alert('Enter a ReID or wait for a face to be tracked.');
-        const res = await fetch(`${API}/api/face/update`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ reid, name }),
-        });
-        const data = await res.json();
-        if (data.status === 'success') {
+        try {
+            await apiFetch('/api/face/update', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ session_id: currentSessionId, model_name: currentModelName, reid, name }),
+            });
             // Update name in all tracked faces with this reid
             for (const [, f] of trackedFaces) {
                 if (f.reid === reid) f.name = name;
@@ -512,8 +533,8 @@ async function initNetwork() {
             updateSidePanel();
             DOM.inputName.value = '';
             DOM.inputReid.value = '';
-        } else {
-            alert('Update failed. Check the ReID.');
+        } catch (e) {
+            alert(`Update failed: ${e.message}`);
         }
     });
 
@@ -766,12 +787,19 @@ async function runInference() {
 
                     const embedding = await getFaceEmbedding(faceImg);
 
-                    const res = await fetch(`${API}/api/face/query`, {
+                    const data = await apiFetch('/api/face/query', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ embedding, session_id: currentSessionId, track_id: tid, known_reid: face.reid }),
+                        body: JSON.stringify({
+                            embedding,
+                            session_id: currentSessionId,
+                            model_name: currentModelName,
+                            track_id: tid,
+                            known_reid: face.reid,
+                            allow_new_identity: true,
+                            allow_profile_expansion: false
+                        }),
                     });
-                    const data = await res.json();
                     if (trackedFaces.has(tid)) {
                         face.reid = data.reid;
                         face.name = data.name;
@@ -825,13 +853,10 @@ DOM.modelSelector.addEventListener('change', async () => {
         await loadFaceNet(currentModelName);
 
         // New model = new embedding space, must reset session
-        const res = await fetch(`${API}/api/session/new`);
-        const data = await res.json();
+        const data = await apiFetch(`/api/session/new?${modelQueryParam()}`);
         currentSessionId = data.session_id;
         DOM.activeSession.textContent = currentSessionId;
-        trackedFaces.clear();
-        tracks = [];
-        nextTrackId = 1;
+        resetTrackingState();
 
         logDebug(`Model switched to ${currentModelName}. New session: ${currentSessionId}`);
     } catch (e) {
@@ -1122,21 +1147,27 @@ DOM.btnSaveIdentity.addEventListener('click', async () => {
         const embedding = await getFaceEmbedding(faceImgData);
 
         // Save to DB
-        const res = await fetch(`${API}/api/face/query`, {
+        const data = await apiFetch('/api/face/query', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ embedding, session_id: currentSessionId, track_id: "upload", known_reid: null }),
+            body: JSON.stringify({
+                embedding,
+                session_id: currentSessionId,
+                model_name: currentModelName,
+                track_id: "upload",
+                known_reid: null,
+                allow_new_identity: true,
+                allow_profile_expansion: false
+            }),
         });
-        const data = await res.json();
 
         // Apply Name
         if (data.reid !== null && data.reid !== undefined) {
-            const updateRes = await fetch(`${API}/api/face/update`, {
+            const updateData = await apiFetch('/api/face/update', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ reid: data.reid, name: name }),
+                body: JSON.stringify({ session_id: currentSessionId, model_name: currentModelName, reid: data.reid, name: name }),
             });
-            const updateData = await updateRes.json();
             if (updateData.status === 'success') {
                 alert(`Identity Verified & Saved!\nName: ${name}\nReID: ${data.reid}`);
 

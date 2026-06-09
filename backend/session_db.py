@@ -6,6 +6,7 @@ import time
 import numpy as np
 import faiss
 import threading
+import math
 from typing import Optional, Tuple
 
 
@@ -13,12 +14,14 @@ class SessionDBManager:
     """Face embedding database backed by FAISS (IndexFlatIP for cosine similarity)."""
 
     EMBED_DIM = 512
+    DEFAULT_MODEL_NAME = "edgeface_xs_gamma_06"
 
-    def __init__(self, base_dir="./sessions"):
+    def __init__(self, base_dir="./sessions", model_name: str = DEFAULT_MODEL_NAME):
         self.base_dir = base_dir
         os.makedirs(self.base_dir, exist_ok=True)
         self._lock = threading.Lock()
         self.active_session_id = None
+        self.model_name = model_name
         self.index = None          # faiss.IndexFlatIP
         self.metadata = []         # [{reid_num, name, key}]
         self.reid_name_map = {}    # key -> name  (for fast lookup)
@@ -26,14 +29,17 @@ class SessionDBManager:
 
     # ─── Sessions ───────────────────────────────────────────────────────────
 
-    def create_new_session(self) -> str:
+    def create_new_session(self, model_name: Optional[str] = None) -> str:
         with self._lock:
+            if model_name:
+                self.model_name = model_name
             session_id = str(uuid.uuid4())
             self.active_session_id = session_id
             self.index = faiss.IndexFlatIP(self.EMBED_DIM)
             self.metadata = []
             self.reid_name_map = {}
             self._next_reid = 1
+            self._save_session()
             print(f"Created new session: {session_id}")
             return session_id
 
@@ -54,6 +60,7 @@ class SessionDBManager:
                 self.metadata = data["metadata"]
                 self.reid_name_map = {m["key"]: m["name"] for m in self.metadata}
                 self._next_reid = data.get("next_reid", 1)
+                self.model_name = data.get("model_name", self.DEFAULT_MODEL_NAME)
                 self.active_session_id = session_id
                 print(f"Loaded session: {session_id} with {len(self.metadata)} embeddings")
                 return True
@@ -87,18 +94,23 @@ class SessionDBManager:
         os.makedirs(session_dir, exist_ok=True)
         faiss.write_index(self.index, os.path.join(session_dir, "faiss.index"))
         with open(os.path.join(session_dir, "metadata.json"), "w") as f:
-            json.dump({"metadata": self.metadata, "next_reid": self._next_reid}, f)
+            json.dump({
+                "metadata": self.metadata,
+                "next_reid": self._next_reid,
+                "model_name": self.model_name,
+            }, f)
 
-    def cleanup_old_sessions(self, days: float = 3.0):
+    def cleanup_old_sessions(self, days: float = 3.0, protected_session_ids: Optional[set] = None):
         """Delete sessions that haven't been modified in the given number of days."""
         with self._lock:
             if not os.path.exists(self.base_dir):
                 return
+            protected_session_ids = protected_session_ids or set()
             now = time.time()
             cutoff = now - (days * 86400)
             cleaned = 0
             for dirname in os.listdir(self.base_dir):
-                if dirname == self.active_session_id:
+                if dirname == self.active_session_id or dirname in protected_session_ids:
                     continue
                 session_dir = os.path.join(self.base_dir, dirname)
                 if not os.path.isdir(session_dir):
@@ -119,37 +131,50 @@ class SessionDBManager:
 
     # ─── Face DB ────────────────────────────────────────────────────────────
 
-    def query_face(self, embedding, threshold: float = 0.40) -> Tuple[Optional[int], Optional[str], Optional[float]]:
-        """Query the FAISS index for the closest face.
-        
-        threshold: cosine SIMILARITY threshold. Values > threshold are considered a match.
-        FAISS IndexFlatIP returns inner product (= cosine sim for L2-normalized vectors).
-        Typical: >0.40 = same person, <0.30 = different person.
-        """
+    def _normalized_embedding(self, embedding) -> np.ndarray:
+        emb = np.array(embedding, dtype=np.float32).reshape(1, -1)
+        if emb.shape[1] != self.EMBED_DIM:
+            raise ValueError(f"Expected {self.EMBED_DIM}D embedding, got {emb.shape[1]}D")
+        if not np.isfinite(emb).all():
+            raise ValueError("Embedding contains non-finite values")
+        norm = float(np.linalg.norm(emb))
+        if not math.isfinite(norm) or norm < 0.1:
+            raise ValueError(f"Degenerate embedding norm={norm:.4f}")
+        faiss.normalize_L2(emb)
+        return emb
+
+    def nearest_face(self, embedding) -> Tuple[Optional[int], Optional[str], Optional[float]]:
+        """Return the closest stored face regardless of match threshold."""
         with self._lock:
             if self.index is None or self.index.ntotal == 0:
-                return None, None, 0.0  # similarity=0 means no match
+                return None, None, 0.0
 
-            # L2 normalize for cosine similarity
-            emb = np.array(embedding, dtype=np.float32).reshape(1, -1)
-            faiss.normalize_L2(emb)
-
-            D, I = self.index.search(emb, 1)  # D = similarities, I = indices
+            emb = self._normalized_embedding(embedding)
+            D, I = self.index.search(emb, 1)
             sim = float(D[0][0])
             idx = int(I[0][0])
 
             if idx < 0 or idx >= len(self.metadata):
                 return None, None, sim
 
-            if sim >= threshold:
-                meta = self.metadata[idx]
-                reid_num = meta["reid_num"]
-                name = meta["name"]
-                print(f"Match: sim={sim:.4f} reid={reid_num} ({name})")
-                return reid_num, name, sim
+            meta = self.metadata[idx]
+            return meta["reid_num"], meta["name"], sim
 
+    def query_face(self, embedding, threshold: float = 0.40) -> Tuple[Optional[int], Optional[str], Optional[float]]:
+        """Query the FAISS index for the closest face.
+
+        threshold: cosine SIMILARITY threshold. Values > threshold are considered a match.
+        FAISS IndexFlatIP returns inner product (= cosine sim for L2-normalized vectors).
+        Typical: >0.40 = same person, <0.30 = different person.
+        """
+        reid_num, name, sim = self.nearest_face(embedding)
+        if reid_num is not None and sim is not None and sim >= threshold:
+            print(f"Match: sim={sim:.4f} reid={reid_num} ({name})")
+            return reid_num, name, sim
+
+        if sim is not None:
             print(f"No match: sim={sim:.4f} (threshold={threshold})")
-            return None, None, sim
+        return None, None, sim
 
     def add_face(self, embedding, name: str) -> int:
         with self._lock:
@@ -160,8 +185,7 @@ class SessionDBManager:
             self._next_reid += 1
             key = f"reid_{reid_num}"
 
-            emb = np.array(embedding, dtype=np.float32).reshape(1, -1)
-            faiss.normalize_L2(emb)
+            emb = self._normalized_embedding(embedding)
             self.index.add(emb)
 
             self.metadata.append({"reid_num": reid_num, "name": name, "key": key})
@@ -182,6 +206,10 @@ class SessionDBManager:
                 self.reid_name_map[key] = new_name
                 self._save_session()
             return updated
+
+    def has_reid(self, reid_num: int) -> bool:
+        with self._lock:
+            return any(m["reid_num"] == reid_num for m in self.metadata)
 
     def merge_faces(self, merge_from_reid: int, merge_to_reid: int) -> bool:
         """Merge all embeddings of one identity into another.</br>Used to continuously learn from Tracker Overrides."""
@@ -224,8 +252,7 @@ class SessionDBManager:
                 return
 
             try:
-                emb = np.array(embedding, dtype=np.float32).reshape(1, -1)
-                faiss.normalize_L2(emb)
+                emb = self._normalized_embedding(embedding)
 
                 D, I = self.index.search(emb, 1)
                 sim = float(D[0][0])

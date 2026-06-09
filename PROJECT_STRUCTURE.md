@@ -1,0 +1,162 @@
+# Project Structure
+
+Generated from the current checkout on 2026-06-09.
+
+## High-Level Flow
+
+1. FastAPI serves `frontend/index.html` and static frontend assets.
+2. `frontend/app.js` loads ONNX Runtime Web from CDN and model files from `frontend/models/`.
+3. The browser runs YOLO face detection, simple IOU tracking, face crop preparation, and EdgeFace embedding inference.
+4. The browser sends normalized embeddings to the backend.
+5. `backend/main.py` resolves the requested `session_id` through an in-memory session registry.
+6. `backend/session_db.py` stores embeddings in a FAISS `IndexFlatIP` index and persists session metadata, including `model_name`, to disk.
+
+## Repository Tree
+
+```text
+.
+|-- .gitignore
+|-- .dockerignore
+|-- AGENTS.md
+|-- Dockerfile
+|-- PROJECT_STRUCTURE.md
+|-- README.md
+|-- export_onnx.py
+|-- requirements-archive.txt
+|-- requirements-models.txt
+|-- requirements.txt
+|-- test_embedding.py
+|-- test_video.mp4
+|-- archive/
+|   |-- db.py
+|   |-- face.py
+|   |-- face_encoding.py
+|   |-- face_encoding_worker.py
+|   |-- facesave.py
+|   |-- main.py
+|   |-- process_embedding_result.py
+|   |-- simpleFace.py
+|   |-- strongSORT.py
+|   `-- ui.py
+|-- backend/
+|   |-- download_models.py
+|   |-- main.py
+|   |-- session_db.py
+|   |-- model/
+|   |   `-- yolov11n-face.pt
+|   `-- sessions/
+|       `-- <session-id>/
+|           |-- faiss.index
+|           `-- metadata.json
+|-- frontend/
+|   |-- app.js
+|   |-- index.html
+|   |-- style.css
+|   `-- models/
+|       |-- edgeface_base.onnx
+|       |-- edgeface_s_gamma_05.onnx
+|       |-- edgeface_xs_gamma_06.onnx
+|       |-- edgeface_xxs.onnx
+|       `-- yolo-face.onnx
+|-- sessions/
+|-- test/
+|   `-- __pycache__/
+|-- tests/
+|   `-- test_session_scoping.py
+|-- venv/
+`-- __pycache__/
+```
+
+## Source Files
+
+### Root
+
+- `README.md`: Basic project overview, setup notes, and research-project warning.
+- `.dockerignore`: Excludes git data, virtual environments, caches, and runtime sessions from Docker build context.
+- `Dockerfile`: Python 3.10 slim image that installs runtime plus model-generation dependencies and runs `python backend/main.py`.
+- `requirements.txt`: Active runtime and offline image harness dependencies.
+- `requirements-models.txt`: Torch/Ultralytics/ONNX dependencies needed to regenerate model artifacts.
+- `requirements-archive.txt`: Legacy dependencies for archived ChromaDB/face_recognition experiments.
+- `export_onnx.py`: Model generation script. Downloads YOLO source weights, exports YOLO ONNX, and exports/downloads EdgeFace ONNX models.
+- `test_embedding.py`: Manual offline image test harness using OpenCV, ONNX Runtime, and the real backend `SessionDBManager`.
+- `test_video.mp4`: Tracked sample video asset.
+- `tests/test_session_scoping.py`: Unit tests for request-scoped session behavior and model compatibility rejection.
+
+### Backend
+
+- `backend/main.py`: Active API entrypoint.
+  - Adds cross-origin isolation headers.
+  - Adds permissive CORS.
+  - Resolves frontend and session paths relative to the source file.
+  - Maintains an in-memory registry of loaded `SessionDBManager` instances keyed by `session_id`.
+  - Requires `session_id` for face query/update operations.
+  - Rejects model/session mismatches with HTTP `409`.
+  - Uses FastAPI lifespan startup for model checks and periodic cleanup of sessions older than 3 days.
+  - Mounts `frontend/` as the static app via an absolute path.
+- `backend/session_db.py`: FAISS-backed session database.
+  - Uses 512-dimensional embeddings.
+  - Uses `faiss.IndexFlatIP` for cosine-style similarity after L2 normalization.
+  - Persists each session as `faiss.index` and `metadata.json`.
+  - Supports add, query, rename, merge, expand, load, delete, and cleanup.
+- `backend/download_models.py`: Checks required model filenames and runs `export_onnx.py` when files are missing.
+
+### Frontend
+
+- `frontend/index.html`: Main DOM structure, session controls, webcam canvas, status panel, crop modal, and CDN script includes.
+- `frontend/app.js`: Active browser app.
+  - Uses the current page origin for API calls, with `http://localhost:8000` as a file-origin fallback.
+  - Provider fallback order: `webgpu`, `webgl`, `wasm`.
+  - Loads `yolo-face.onnx` plus the selected EdgeFace model.
+  - Sends `session_id` and `model_name` with face query/update requests.
+  - Runs detection, NMS, IOU tracking, embedding extraction, session actions, identity rename, model switching, and photo crop flow.
+- `frontend/style.css`: Static app styling for the main panel, controls, video canvas, side panel, debug console, loading overlay, and crop modal.
+
+### Archive
+
+`archive/` contains older Python/OpenCV/ChromaDB/face_recognition experiments. The current WebGPU/FastAPI app does not call these files.
+
+## Runtime And Generated Folders
+
+These folders are present locally but are generated or runtime data:
+
+- `frontend/models/`: ONNX model artifacts. Required at runtime, generated by `export_onnx.py`, ignored by git.
+- `backend/model/`: Downloaded YOLO `.pt` source weight. Generated, ignored by git.
+- `backend/sessions/`: Current session persistence location.
+- `sessions/`: Root-level session folder from older cwd-dependent launches.
+- `test/`: Manual image input folder for `test_embedding.py`; currently no tracked test images.
+- `venv/`: Local Python 3.10 virtual environment.
+- `__pycache__/`, `.pytest_cache/`: Local caches.
+
+## API Surface
+
+```text
+GET    /api/health
+GET    /api/session/new?model_name=...
+GET    /api/session/load/{session_id}?model_name=...
+DELETE /api/session/{session_id}
+POST   /api/face/query    body includes session_id, model_name, embedding
+POST   /api/face/update   body includes session_id, model_name, reid, name
+GET    /... static frontend files
+```
+
+## Local Model Inventory
+
+The following generated model files are present locally under `frontend/models/`:
+
+```text
+edgeface_base.onnx        ~69.8 MiB
+edgeface_s_gamma_05.onnx  ~14.2 MiB
+edgeface_xs_gamma_06.onnx ~7.0 MiB
+edgeface_xxs.onnx         ~4.9 MiB
+yolo-face.onnx            ~10.1 MiB
+```
+
+`backend/model/yolov11n-face.pt` is also present locally at about 5.2 MiB.
+
+## Current Check Results
+
+- `node --check frontend\app.js` passed.
+- Python `py_compile` passed for tracked `.py` files outside `venv/`, `__pycache__/`, and `test/`.
+- `python -m unittest tests.test_session_scoping` passed.
+- Runtime imports passed from both repo-root and `backend/` working directories.
+- Live root launch smoke test passed: `python backend\main.py` served `/api/health` and `/`.

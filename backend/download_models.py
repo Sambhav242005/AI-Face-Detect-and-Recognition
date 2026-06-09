@@ -27,7 +27,13 @@ def ensure_models_exist():
         print("Invoking export_onnx.py to build them locally from original repos...")
         export_script = os.path.join(project_root, "export_onnx.py")
         if os.path.exists(export_script):
-            subprocess.run([sys.executable, export_script], cwd=project_root, check=True)
+            try:
+                subprocess.run([sys.executable, export_script], cwd=project_root, check=True)
+            except subprocess.CalledProcessError as exc:
+                raise RuntimeError(
+                    "Model export failed. Install model-generation dependencies with "
+                    "`python -m pip install -r requirements-models.txt`, then rerun the server."
+                ) from exc
         else:
             print(f"ERROR: Cannot find {export_script} to generate models.")
     else:

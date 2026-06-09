@@ -1,0 +1,2 @@
+chromadb
+face_recognition

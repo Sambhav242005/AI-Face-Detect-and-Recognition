@@ -8,9 +8,9 @@ A client-side AI face tracking and recognition application leveraging WebGPU and
 ## Features
 
 - **Browser-based AI**: Runs YOLOv8 face detection and EdgeFace face embeddings directly in the browser via WebGPU/WASM ONNX Runtime.
-- **FastAPI Backend**: A lightweight Python backend that acts purely as an API server for the SQLite/FAISS session database.
+- **FastAPI Backend**: A lightweight Python backend that acts purely as an API server for the FAISS session database and JSON metadata.
 - **Session Management**: Session persistence and deletion capabilities.
-- **Image Identification Tool**: Upload an image to quickly crop and identify a face using the active session database.
+- **Image Identification Tool**: Upload an image to quickly crop and identify a face using the selected session database.
 
 ## Prerequisites
 
@@ -38,6 +38,18 @@ The ONNX models (YOLO and EdgeFace) are compiled locally. The application will a
    pip install -r requirements.txt
    ```
 
+   If `frontend/models/` is missing ONNX models and you need the app to generate them locally, also install:
+
+   ```bash
+   pip install -r requirements-models.txt
+   ```
+
+   The `archive/` folder has separate legacy dependencies. Install them only when working on archived experiments:
+
+   ```bash
+   pip install -r requirements-archive.txt
+   ```
+
 3. Run the FastAPI backend server:
 
    ```bash
@@ -54,6 +66,8 @@ You can easily spin up the environment using Docker:
 docker build -t face-ai-webgpu .
 docker run -p 8000:8000 face-ai-webgpu
 ```
+
+The Docker image installs both runtime and model-generation dependencies so it can build missing ONNX files during startup.
 
 ## Note on Repository Structure (Archive Folder)
 
