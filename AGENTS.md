@@ -121,12 +121,28 @@ Startup calls `ensure_models_exist()`. If any required model is missing, it runs
 - Treat model downloads as networked, heavyweight, and non-deterministic.
 - Do not present this app as a secure biometric access-control system.
 
+## Portfolio Cover Asset
+
+Maintain a project-specific SVG at `docs/portfolio-cover.svg`.
+
+Rules:
+- The SVG must be hand-authored/static, not a raster screenshot, AI-generated image, base64 image, or external asset.
+- Use `width="1200"`, `height="760"`, `viewBox="0 0 1200 760"`.
+- It should visually summarize the real current project: architecture, workflow, UI, model pipeline, or system behavior.
+- Update this SVG whenever major project functionality, architecture, or branding changes.
+- Keep text minimal and readable at thumbnail size.
+- No fake product names, unrelated placeholder visuals, or generic charts.
+- The portfolio repo may copy this file into `public/project-assets/` as the local backup/rendering copy.
+
 ## Last Local Check
 
-Checked on 2026-06-09:
+Checked on 2026-06-25:
 
 - `node --check frontend\app.js` passed.
-- Python `py_compile` over tracked source files passed using the recreated `venv`.
+- Python `py_compile` over `backend/main.py`, `backend/session_db.py`, `backend/download_models.py`, `export_onnx.py`, `test_embedding.py` passed.
+- SVG `docs/portfolio-cover.svg` is well-formed XML, 1200×760, no external assets.
+
+Last full-stack verification (2026-06-09):
 - `python -m unittest tests.test_session_scoping` passed.
 - Backend imports passed from both repo-root and `backend/` working directories.
 - `python backend\main.py` served `/api/health` with `{"status":"ok"}` and served the frontend at `/`.

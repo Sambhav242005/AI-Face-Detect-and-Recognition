@@ -8,6 +8,9 @@ const API = window.location.origin && window.location.origin !== 'null'
     ? window.location.origin
     : 'http://localhost:8000';
 
+const STORE_KEY = 'ai_face_last_session';
+const MAX_LOG_LINES = 200;
+
 const DOM = {
     webcam: document.getElementById('webcam'),
     canvas: document.getElementById('gpuCanvas'),
@@ -35,6 +38,12 @@ const DOM = {
     progressBar: document.getElementById('progressBar'),
     debugConsole: document.getElementById('debugConsole'),
     modelSelector: document.getElementById('modelSelector'),
+    // Session List
+    sessionList: document.getElementById('sessionList'),
+    sessionListPanel: document.getElementById('sessionListPanel'),
+    btnToggleSessions: document.getElementById('btnToggleSessionList'),
+    // Delete identity
+    btnDeleteIdentity: document.getElementById('btnDeleteIdentity'),
     // Crop Modal Elements
     cropModal: document.getElementById('cropModal'),
     cropContainer: document.getElementById('cropContainer'),
@@ -108,7 +117,76 @@ function logDebug(msg) {
     const el = document.createElement('div');
     el.textContent = `[${time}] ${msg}`;
     DOM.debugConsole.appendChild(el);
+    // Prune old entries to prevent unbounded DOM growth
+    while (DOM.debugConsole.children.length > MAX_LOG_LINES) {
+        DOM.debugConsole.removeChild(DOM.debugConsole.firstChild);
+    }
     DOM.debugConsole.scrollTop = DOM.debugConsole.scrollHeight;
+}
+
+// ─── Session Persistence ──────────────────────────────────────────────────
+
+function saveLastSession(sessionId) {
+    try {
+        localStorage.setItem(STORE_KEY, JSON.stringify({
+            session_id: sessionId,
+            model_name: currentModelName,
+            timestamp: Date.now()
+        }));
+    } catch (_) {}
+}
+
+function getLastSession() {
+    try {
+        const raw = localStorage.getItem(STORE_KEY);
+        if (!raw) return null;
+        const data = JSON.parse(raw);
+        if (!data.session_id || !data.model_name) return null;
+        return data;
+    } catch (_) {
+        return null;
+    }
+}
+
+function clearLastSession() {
+    try {
+        localStorage.removeItem(STORE_KEY);
+    } catch (_) {}
+}
+
+async function refreshSessionList() {
+    try {
+        const data = await apiFetch('/api/session/list');
+        DOM.sessionList.innerHTML = '';
+        if (!data.sessions || data.sessions.length === 0) {
+            DOM.sessionList.innerHTML = '<div class="session-list-empty">No saved sessions</div>';
+            return;
+        }
+        for (const s of data.sessions) {
+            const row = document.createElement('div');
+            row.className = 'session-list-item';
+            row.innerHTML = `
+                <span class="session-list-id">${s.session_id.substring(0, 8)}…</span>
+                <span class="session-list-meta">${s.model_name} · ${s.embedding_count} emb</span>
+            `;
+            row.title = `ID: ${s.session_id}\nModel: ${s.model_name}\nEmbeddings: ${s.embedding_count}`;
+            row.addEventListener('click', async () => {
+                try {
+                    const loadData = await apiFetch(`/api/session/load/${encodeURIComponent(s.session_id)}?model_name=${encodeURIComponent(currentModelName)}`);
+                    currentSessionId = s.session_id;
+                    DOM.activeSession.textContent = currentSessionId;
+                    saveLastSession(currentSessionId);
+                    resetTrackingState();
+                    logDebug(`Loaded session ${currentSessionId.substring(0, 8)}… (${loadData.face_count} faces, ${loadData.unique_identities} identities)`);
+                } catch (e) {
+                    logDebug(`Failed to load session: ${e.message}`);
+                }
+            });
+            DOM.sessionList.appendChild(row);
+        }
+    } catch (e) {
+        DOM.sessionList.innerHTML = '<div class="session-list-empty">Failed to load sessions</div>';
+    }
 }
 
 function resetTrackingState() {
@@ -371,53 +449,49 @@ function computeIOU(a, b) {
 
 // ─── Face Embedding ───────────────────────────────────────────────────────
 
-async function getFaceEmbedding(faceImageData) {
-    // Resize face crop to 112x112. Input: ImageData from canvas
-    const tmpCanvas = document.createElement('canvas');
-    tmpCanvas.width = 112;
-    tmpCanvas.height = 112;
-    const tmpCtx = tmpCanvas.getContext('2d');
+// Reusable canvas for embedding to avoid repeated allocations
+const _embedCanvas = document.createElement('canvas');
+_embedCanvas.width = 112;
+_embedCanvas.height = 112;
+const _embedCtx = _embedCanvas.getContext('2d', { willReadFrequently: true });
 
-    // We need to draw the crop to a temp canvas at 112x112 without stretching
-    const srcCanvas = document.createElement('canvas');
-    srcCanvas.width = faceImageData.width;
-    srcCanvas.height = faceImageData.height;
-    const srcCtx = srcCanvas.getContext('2d');
-    srcCtx.putImageData(faceImageData, 0, 0);
+async function getFaceEmbeddingOptimized(faceImageData) {
+    // Draw face crop directly to target 112x112 with letterbox
+    _embedCtx.fillStyle = '#000000';
+    _embedCtx.fillRect(0, 0, 112, 112);
 
-    const targetDim = 112;
-    const scale = Math.min(targetDim / faceImageData.width, targetDim / faceImageData.height);
-    const newW = faceImageData.width * scale;
-    const newH = faceImageData.height * scale;
-    const padX = (targetDim - newW) / 2;
-    const padY = (targetDim - newH) / 2;
+    const scale = Math.min(112 / faceImageData.width, 112 / faceImageData.height);
+    const newW = Math.round(faceImageData.width * scale);
+    const newH = Math.round(faceImageData.height * scale);
+    const padX = Math.round((112 - newW) / 2);
+    const padY = Math.round((112 - newH) / 2);
 
-    tmpCtx.fillStyle = '#000000'; // Black padding for letterbox
-    tmpCtx.fillRect(0, 0, targetDim, targetDim);
-    tmpCtx.drawImage(srcCanvas, 0, 0, faceImageData.width, faceImageData.height, padX, padY, newW, newH);
+    // Draw from ImageData using a temp canvas to create a bitmap source
+    const tmpSrc = document.createElement('canvas');
+    tmpSrc.width = faceImageData.width;
+    tmpSrc.height = faceImageData.height;
+    const tmpSrcCtx = tmpSrc.getContext('2d');
+    tmpSrcCtx.putImageData(faceImageData, 0, 0);
+    _embedCtx.drawImage(tmpSrc, 0, 0, faceImageData.width, faceImageData.height, padX, padY, newW, newH);
 
-    const pixels = tmpCtx.getImageData(0, 0, 112, 112).data;
+    const pixels = _embedCtx.getImageData(0, 0, 112, 112).data;
 
-    // InsightFace models (like buffalo_l / w600k_r50) strictly require:
-    // 1. RGB channel order
-    // 2. Normalization: (value - 127.5) / 127.5
-    // Canvas getImageData() returns RGBA where index 0=R, 1=G, 2=B.
     const float32 = new Float32Array(3 * 112 * 112);
     for (let i = 0; i < 112 * 112; i++) {
-        float32[i] = (pixels[i * 4] - 127.5) / 127.5;         // R → ch0
-        float32[i + 112 * 112] = (pixels[i * 4 + 1] - 127.5) / 127.5; // G → ch1
-        float32[i + 2 * 112 * 112] = (pixels[i * 4 + 2] - 127.5) / 127.5; // B → ch2
+        float32[i] = (pixels[i * 4] - 127.5) / 127.5;
+        float32[i + 112 * 112] = (pixels[i * 4 + 1] - 127.5) / 127.5;
+        float32[i + 2 * 112 * 112] = (pixels[i * 4 + 2] - 127.5) / 127.5;
     }
 
-    const inputTensor = new ort.Tensor('float32', float32, [1, 3, 112, 112]);
     const inputName = faceSession.inputNames[0];
+    const inputTensor = new ort.Tensor('float32', float32, [1, 3, 112, 112]);
     const results = await faceSession.run({ [inputName]: inputTensor });
     const outputName = faceSession.outputNames[0];
     const rawEmbed = Array.from(results[outputName].data);
 
     // ── Diagnostic: log embedding health once every 60 calls ──────────────────
-    if (!getFaceEmbedding._callCount) getFaceEmbedding._callCount = 0;
-    if (++getFaceEmbedding._callCount % 60 === 1) {
+    if (!getFaceEmbeddingOptimized._callCount) getFaceEmbeddingOptimized._callCount = 0;
+    if (++getFaceEmbeddingOptimized._callCount % 60 === 1) {
         const rawNorm = Math.sqrt(rawEmbed.reduce((s, v) => s + v * v, 0));
         const rawMin = Math.min(...rawEmbed.slice(0, 64));
         const rawMax = Math.max(...rawEmbed.slice(0, 64));
@@ -426,9 +500,13 @@ async function getFaceEmbedding(faceImageData) {
         logDebug(`[FaceEmbed] norm=${rawNorm.toFixed(3)} var=${variance.toFixed(5)} — if norm~0 model is broken`);
     }
 
-    // L2 normalize to unit sphere
     const norm = Math.sqrt(rawEmbed.reduce((s, v) => s + v * v, 0));
     return rawEmbed.map(v => v / (norm + 1e-10));
+}
+
+// Keep the original name as an alias for backward compat in crop modal
+async function getFaceEmbedding(faceImageData) {
+    return getFaceEmbeddingOptimized(faceImageData);
 }
 
 // ─── Simple IOU Tracker ───────────────────────────────────────────────────
@@ -487,17 +565,46 @@ function updateTracker(detections) {
 // ─── Network / Session ─────────────────────────────────────────────────────
 
 async function initNetwork() {
-    const data = await apiFetch(`/api/session/new?${modelQueryParam()}`);
-    currentSessionId = data.session_id;
-    DOM.activeSession.textContent = currentSessionId;
+    // Try restoring the last session instead of always creating a new one
+    const saved = getLastSession();
+    if (saved && saved.model_name === currentModelName) {
+        try {
+            const data = await apiFetch(`/api/session/load/${encodeURIComponent(saved.session_id)}?model_name=${encodeURIComponent(currentModelName)}`);
+            currentSessionId = saved.session_id;
+            DOM.activeSession.textContent = currentSessionId;
+            logDebug(`Restored session ${currentSessionId.substring(0, 8)}… (${data.face_count} faces, ${data.unique_identities} identities)`);
+        } catch (_) {
+            // Session expired or invalid, create a new one
+            clearLastSession();
+        }
+    }
+
+    if (!currentSessionId) {
+        const data = await apiFetch(`/api/session/new?${modelQueryParam()}`);
+        currentSessionId = data.session_id;
+        DOM.activeSession.textContent = currentSessionId;
+        saveLastSession(currentSessionId);
+    }
+
+    // Session list panel
+    DOM.btnToggleSessions.addEventListener('click', async () => {
+        const isVisible = !DOM.sessionListPanel.classList.contains('hidden');
+        DOM.sessionListPanel.classList.toggle('hidden');
+        if (!isVisible) {
+            await refreshSessionList();
+        }
+    });
 
     DOM.btnNew.addEventListener('click', async () => {
         try {
             const data = await apiFetch(`/api/session/new?${modelQueryParam()}`);
             currentSessionId = data.session_id;
             DOM.activeSession.textContent = currentSessionId;
+            saveLastSession(currentSessionId);
             resetTrackingState();
+            logDebug(`New session: ${currentSessionId.substring(0, 8)}…`);
         } catch (e) {
+            logDebug(`Failed to create session: ${e.message}`);
             alert(`Failed to create session: ${e.message}`);
         }
     });
@@ -509,7 +616,9 @@ async function initNetwork() {
             const data = await apiFetch(`/api/session/load/${encodeURIComponent(id)}?${modelQueryParam()}`);
             currentSessionId = id;
             DOM.activeSession.textContent = currentSessionId;
+            saveLastSession(currentSessionId);
             resetTrackingState();
+            logDebug(`Loaded session ${currentSessionId.substring(0, 8)}…`);
             alert(`Session loaded (${data.model_name}).`);
         } catch (e) {
             alert(`Failed to load session: ${e.message}`);
@@ -522,9 +631,10 @@ async function initNetwork() {
 
         try {
             await apiFetch(`/api/session/${encodeURIComponent(currentSessionId)}`, { method: 'DELETE' });
-            alert('Session deleted successfully.');
+            logDebug(`Deleted session ${currentSessionId.substring(0, 8)}…`);
             currentSessionId = null;
             DOM.activeSession.textContent = 'None';
+            clearLastSession();
             resetTrackingState();
         } catch (e) {
             console.error(e);
@@ -573,6 +683,22 @@ async function initNetwork() {
         }
     });
 
+    // Delete identity button
+    DOM.btnDeleteIdentity.addEventListener('click', async () => {
+        const face = closestTrackId !== null ? trackedFaces.get(closestTrackId) : null;
+        const reid = face ? face.reid : null;
+        if (!currentSessionId) return alert('No active session.');
+        if (reid === null || reid === undefined) return alert('No ReID to delete. Wait for a face to be recognized.');
+        if (!confirm(`Remove identity ReID ${reid} from this session?`)) return;
+        try {
+            await apiFetch(`/api/face/${encodeURIComponent(currentSessionId)}/${reid}`, { method: 'DELETE' });
+            logDebug(`Deleted identity ReID ${reid}`);
+            resetTrackingState();
+        } catch (e) {
+            alert(`Delete failed: ${e.message}`);
+        }
+    });
+
     DOM.btnUploadTrigger.addEventListener('click', () => {
         DOM.imageUpload.click();
     });
@@ -617,6 +743,38 @@ async function initCamera() {
     const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: false });
     DOM.webcam.srcObject = stream;
     DOM.webcam.style.display = 'none';
+
+    // Handle webcam disconnect (unplugged, disabled, etc.)
+    const track = stream.getVideoTracks()[0];
+    if (track) {
+        track.addEventListener('ended', () => {
+            logDebug('Webcam disconnected');
+            DOM.status.textContent = 'Camera Lost';
+            DOM.status.className = 'status-indicator disconnected';
+            setPaused(true);
+            // Try to reconnect every 3 seconds
+            const reconnectInterval = setInterval(async () => {
+                try {
+                    const newStream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: false });
+                    DOM.webcam.srcObject = newStream;
+                    const newTrack = newStream.getVideoTracks()[0];
+                    if (newTrack) {
+                        newTrack.addEventListener('ended', () => {
+                            logDebug('Webcam disconnected again');
+                            setPaused(true);
+                        });
+                    }
+                    clearInterval(reconnectInterval);
+                    logDebug('Webcam reconnected');
+                    DOM.status.textContent = `Running (${executionProvider.toUpperCase()})`;
+                    DOM.status.className = 'status-indicator connected';
+                    setPaused(false);
+                } catch (_) {
+                    // Still disconnected, keep waiting
+                }
+            }, 3000);
+        });
+    }
 
     await new Promise((resolve) => {
         if (DOM.webcam.readyState >= 2) resolve();
@@ -731,6 +889,8 @@ function startRenderLoop() {
 async function runInference() {
     try {
         if (isPaused) return;
+        // Guard against model-switching race: faceSession might be null briefly
+        if (!faceSession || !yoloSession) return;
 
         // Capture current frame
         extractCtx.drawImage(DOM.webcam, 0, 0, 640, 480);
@@ -832,7 +992,7 @@ async function runInference() {
                     // Allow UI to render the [⏳ Processing] tag before the thread is blocked
                     await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
 
-                    const embedding = await getFaceEmbedding(faceImg);
+                    const embedding = await getFaceEmbeddingOptimized(faceImg);
 
                     const data = await apiFetch('/api/face/query', {
                         method: 'POST',
@@ -844,7 +1004,7 @@ async function runInference() {
                             track_id: tid,
                             known_reid: face.reid,
                             allow_new_identity: true,
-                            allow_profile_expansion: false
+                            allow_profile_expansion: true
                         }),
                     });
                     if (trackedFaces.has(tid)) {
@@ -886,11 +1046,12 @@ DOM.modelSelector.addEventListener('change', async () => {
     const newModel = DOM.modelSelector.value;
     if (newModel === currentModelName) return;
 
+    const prevModel = currentModelName;
     logDebug(`Switching model: ${currentModelName} → ${newModel}`);
     DOM.faceNetStatus.textContent = 'Loading...';
 
     try {
-        // Release old session
+        // Release old session — faceSession is now null, runInference will skip safely
         if (faceSession) {
             await faceSession.release();
             faceSession = null;
@@ -903,6 +1064,7 @@ DOM.modelSelector.addEventListener('change', async () => {
         const data = await apiFetch(`/api/session/new?${modelQueryParam()}`);
         currentSessionId = data.session_id;
         DOM.activeSession.textContent = currentSessionId;
+        saveLastSession(currentSessionId);
         resetTrackingState();
 
         logDebug(`Model switched to ${currentModelName}. New session: ${currentSessionId}`);
@@ -910,6 +1072,9 @@ DOM.modelSelector.addEventListener('change', async () => {
         console.error('Model switch failed:', e);
         logDebug(`Model switch error: ${e.message}`);
         DOM.faceNetStatus.textContent = 'ERROR';
+        // Revert selector to previous working model
+        currentModelName = prevModel;
+        DOM.modelSelector.value = prevModel;
     }
 });
 

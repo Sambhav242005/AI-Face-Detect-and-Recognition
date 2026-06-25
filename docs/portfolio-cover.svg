@@ -1,0 +1,380 @@
+<svg width="1200" height="760" viewBox="0 0 1200 760" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#020617"/>
+    </linearGradient>
+    <linearGradient id="monitorBg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#111827"/>
+      <stop offset="100%" stop-color="#080c18"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#0ea5e9"/>
+      <stop offset="100%" stop-color="#22d3ee"/>
+    </linearGradient>
+    <radialGradient id="faceSkin" cx="50%" cy="40%" r="55%">
+      <stop offset="0%" stop-color="#f5e6d0"/>
+      <stop offset="60%" stop-color="#e8d4b8"/>
+      <stop offset="100%" stop-color="#c4a882"/>
+    </radialGradient>
+    <filter id="neonGlow">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="softGlow">
+      <feGaussianBlur stdDeviation="2" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="10" stdDeviation="20" flood-color="#000" flood-opacity="0.6"/>
+    </filter>
+    <filter id="panelBlur">
+      <feGaussianBlur stdDeviation="1"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="760" fill="url(#bg)"/>
+
+  <!-- Title -->
+  <text x="60" y="52" font-family="Inter, Helvetica, Arial, sans-serif" font-size="28" font-weight="700" fill="#f8fafc" letter-spacing="1">Real-Time AI Face Recognition</text>
+  <text x="60" y="78" font-family="Inter, Helvetica, Arial, sans-serif" font-size="14" fill="#64748b" letter-spacing="2">In-Browser Detection &amp; Recognition · ONNX Runtime Web · EdgeFace · FAISS</text>
+
+  <!-- ====== MAIN BROWSER MONITOR ====== -->
+  <g filter="url(#shadow)">
+    <rect x="50" y="105" width="730" height="565" rx="14" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
+  </g>
+  <!-- Title bar -->
+  <rect x="50" y="105" width="730" height="40" rx="14" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
+  <rect x="50" y="129" width="730" height="16" fill="#1e293b"/>
+  <circle cx="74" cy="125" r="5.5" fill="#ef4444"/>
+  <circle cx="94" cy="125" r="5.5" fill="#eab308"/>
+  <circle cx="114" cy="125" r="5.5" fill="#22c55e"/>
+  <text x="415" y="130" text-anchor="middle" font-family="Inter, Helvetica, Arial, sans-serif" font-size="11" font-weight="500" fill="#64748b">localhost:8000</text>
+
+  <!-- Camera feed area -->
+  <rect x="50" y="145" width="730" height="525" fill="url(#monitorBg)"/>
+  <rect x="50" y="145" width="730" height="525" fill="url(#monitorBg)"/>
+
+  <!-- ====== Face Portrait ====== -->
+  <!-- Hair -->
+  <path d="M310 260 Q320 200 370 185 Q400 175 430 180 Q480 185 500 220 Q520 250 515 290 Q518 320 510 350 L500 350 Q505 320 505 290 Q500 250 480 225 Q460 200 430 195 Q400 192 375 200 Q340 210 325 240 Q310 270 315 310 L305 310 Z" fill="#1a1a2e"/>
+
+  <!-- Face shape -->
+  <ellipse cx="410" cy="390" rx="105" ry="140" fill="url(#faceSkin)"/>
+
+  <!-- Neck -->
+  <rect x="375" y="510" width="70" height="60" rx="10" fill="#d4b896" opacity="0.6"/>
+
+  <!-- Eyes -->
+  <!-- Left eye -->
+  <ellipse cx="370" cy="350" rx="18" ry="10" fill="#fff"/>
+  <circle cx="368" cy="350" r="7" fill="#1a1a2e"/>
+  <circle cx="365" cy="348" r="3" fill="#fff"/>
+  <!-- Right eye -->
+  <ellipse cx="450" cy="350" rx="18" ry="10" fill="#fff"/>
+  <circle cx="448" cy="350" r="7" fill="#1a1a2e"/>
+  <circle cx="445" cy="348" r="3" fill="#fff"/>
+
+  <!-- Eyebrows -->
+  <path d="M350 333 Q360 326 385 330" fill="none" stroke="#1a1a2e" stroke-width="3" stroke-linecap="round"/>
+  <path d="M435 330 Q455 326 470 333" fill="none" stroke="#1a1a2e" stroke-width="3" stroke-linecap="round"/>
+
+  <!-- Nose -->
+  <path d="M410 360 L405 395 Q410 400 415 395 L412 360" fill="none" stroke="#c4a882" stroke-width="2" stroke-linecap="round"/>
+
+  <!-- Mouth -->
+  <path d="M385 430 Q397 440 410 438 Q423 440 435 430" fill="none" stroke="#c4847a" stroke-width="2.5" stroke-linecap="round"/>
+
+  <!-- ====== Bounding Boxes ====== -->
+  <!-- Primary face box - neon cyan with glow -->
+  <g filter="url(#neonGlow)">
+    <rect x="290" y="235" width="240" height="300" rx="6" fill="none" stroke="#22d3ee" stroke-width="3"/>
+  </g>
+  <rect x="290" y="235" width="240" height="300" rx="6" fill="none" stroke="#22d3ee" stroke-width="2" opacity="0.3"/>
+
+  <!-- Corner ticks -->
+  <path d="M290 245 L290 235 L300 235" fill="none" stroke="#22d3ee" stroke-width="2.5"/>
+  <path d="M520 235 L530 235 L530 245" fill="none" stroke="#22d3ee" stroke-width="2.5"/>
+  <path d="M290 525 L290 535 L300 535" fill="none" stroke="#22d3ee" stroke-width="2.5"/>
+  <path d="M520 535 L530 535 L530 525" fill="none" stroke="#22d3ee" stroke-width="2.5"/>
+
+  <!-- Label badge -->
+  <g filter="url(#softGlow)">
+    <rect x="295" y="540" width="175" height="34" rx="6" fill="#0f172a" fill-opacity="0.85" stroke="#22d3ee" stroke-width="1"/>
+  </g>
+  <circle cx="312" cy="557" r="5" fill="#22d3ee"/>
+  <text x="325" y="554" font-family="Inter, Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#f8fafc">Alice</text>
+  <text x="325" y="568" font-family="Inter, Helvetica, Arial, sans-serif" font-size="9" fill="#94a3b8">D:0.72  R:1  T:3</text>
+
+  <!-- Second smaller box (face #2 - Unknown) -->
+  <g opacity="0.5">
+    <rect x="190" y="480" width="70" height="85" rx="4" fill="none" stroke="#64748b" stroke-width="1.5"/>
+    <text x="195" y="582" font-family="Inter, Helvetica, Arial, sans-serif" font-size="9" fill="#94a3b8">Unknown</text>
+  </g>
+
+  <!-- ====== Side Panel (overlaid on monitor) ====== -->
+  <rect x="620" y="160" width="145" height="280" rx="10" fill="#0f172a" fill-opacity="0.7" stroke="#334155" stroke-width="1"/>
+  <text x="670" y="183" text-anchor="middle" font-family="Inter, Helvetica, Arial, sans-serif" font-size="10" font-weight="600" fill="#64748b" letter-spacing="2">DETECTIONS</text>
+  <line x1="632" y1="193" x2="753" y2="193" stroke="#334155" stroke-width="1"/>
+
+  <!-- Detection rows -->
+  <rect x="632" y="204" width="121" height="28" rx="4" fill="#1e293b"/>
+  <circle cx="644" cy="218" r="4" fill="#22d3ee"/>
+  <text x="654" y="219" font-family="Inter, Helvetica, Arial, sans-serif" font-size="11" font-weight="500" fill="#f8fafc">Alice</text>
+  <text x="740" y="219" text-anchor="end" font-family="Inter, Helvetica, Arial, sans-serif" font-size="10" fill="#22d3ee">0.72</text>
+
+  <rect x="632" y="238" width="121" height="28" rx="4" fill="none"/>
+  <circle cx="644" cy="252" r="4" fill="#64748b"/>
+  <text x="654" y="253" font-family="Inter, Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#94a3b8">Unknown</text>
+  <text x="740" y="253" text-anchor="end" font-family="Inter, Helvetica, Arial, sans-serif" font-size="10" fill="#64748b">0.41</text>
+
+  <line x1="632" y1="272" x2="753" y2="272" stroke="#334155" stroke-width="0.5"/>
+
+  <text x="670" y="290" text-anchor="middle" font-family="Inter, Helvetica, Arial, sans-serif" font-size="10" font-weight="600" fill="#64748b" letter-spacing="2">STATUS</text>
+  <text x="670" y="310" text-anchor="middle" font-family="Inter, Helvetica, Arial, sans-serif" font-size="10" fill="#22d3ee">● Live</text>
+  <text x="670" y="328" text-anchor="middle" font-family="Inter, Helvetica, Arial, sans-serif" font-size="9" fill="#64748b">Session: edgeface_xs</text>
+  <text x="670" y="344" text-anchor="middle" font-family="Inter, Helvetica, Arial, sans-serif" font-size="9" fill="#64748b">Model: EdgeFace XS</text>
+  <text x="670" y="360" text-anchor="middle" font-family="Inter, Helvetica, Arial, sans-serif" font-size="9" fill="#64748b">Backend: 127.0.0.1</text>
+
+  <!-- Model loading badge -->
+  <rect x="620" y="450" width="145" height="40" rx="10" fill="#0f172a" fill-opacity="0.7" stroke="#334155" stroke-width="1"/>
+  <text x="692" y="468" text-anchor="middle" font-family="Inter, Helvetica, Arial, sans-serif" font-size="8" fill="#64748b">ONNX Runtime</text>
+  <text x="692" y="482" text-anchor="middle" font-family="Inter, Helvetica, Arial, sans-serif" font-size="9" font-weight="600" fill="#22d3ee">WebGPU</text>
+
+  <!-- ====== RECORDING INDICATOR ====== -->
+  <circle cx="64" cy="168" r="5" fill="#ef4444">
+    <animate attributeName="opacity" values="1;0.3;1" dur="2s" repeatCount="indefinite"/>
+  </circle>
+  <text x="74" y="172" font-family="Inter, Helvetica, Arial, sans-serif" font-size="9" fill="#ef4444" font-weight="600">REC</text>
+
+  <!-- ====== Right side: EMBEDDING VECTOR VISUALIZATION ====== -->
+  <g filter="url(#shadow)">
+    <rect x="830" y="110" width="320" height="250" rx="14" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+  </g>
+  <text x="990" y="138" text-anchor="middle" font-family="Inter, Helvetica, Arial, sans-serif" font-size="11" font-weight="600" fill="#cbd5e1">512D Embedding Vector</text>
+  <line x1="860" y1="148" x2="1120" y2="148" stroke="#334155" stroke-width="0.5"/>
+
+  <!-- Arrow from monitor to embedding -->
+  <path d="M780 380 Q810 380 820 280" fill="none" stroke="#22d3ee" stroke-width="1.5" stroke-dasharray="4 3" opacity="0.5" marker-end="url(#arrowCyan)"/>
+  <text x="790" y="330" font-family="Inter, Helvetica, Arial, sans-serif" font-size="8" fill="#64748b">L2 normalize</text>
+
+  <!-- Embedding dot grid (16x8 = 128 dots representing 512D) -->
+  <g opacity="0.3">
+    <!-- Row 1 -->
+    <circle cx="860" cy="170" r="3" fill="#64748b"/>
+    <circle cx="880" cy="170" r="3" fill="#64748b"/>
+    <circle cx="900" cy="170" r="3" fill="#0ea5e9"/>
+    <circle cx="920" cy="170" r="3" fill="#64748b"/>
+    <circle cx="940" cy="170" r="3" fill="#64748b"/>
+    <circle cx="960" cy="170" r="3" fill="#64748b"/>
+    <circle cx="980" cy="170" r="3" fill="#64748b"/>
+    <circle cx="1000" cy="170" r="3" fill="#0ea5e9"/>
+    <circle cx="1020" cy="170" r="3" fill="#64748b"/>
+    <circle cx="1040" cy="170" r="3" fill="#64748b"/>
+    <circle cx="1060" cy="170" r="3" fill="#64748b"/>
+    <circle cx="1080" cy="170" r="3" fill="#64748b"/>
+    <circle cx="1100" cy="170" r="3" fill="#22d3ee"/>
+    <circle cx="1120" cy="170" r="3" fill="#64748b"/>
+  </g>
+  <g opacity="0.3">
+    <circle cx="860" cy="195" r="3" fill="#64748b"/>
+    <circle cx="880" cy="195" r="3" fill="#64748b"/>
+    <circle cx="900" cy="195" r="3" fill="#64748b"/>
+    <circle cx="920" cy="195" r="3" fill="#64748b"/>
+    <circle cx="940" cy="195" r="3" fill="#0ea5e9"/>
+    <circle cx="960" cy="195" r="3" fill="#64748b"/>
+    <circle cx="980" cy="195" r="3" fill="#64748b"/>
+    <circle cx="1000" cy="195" r="3" fill="#64748b"/>
+    <circle cx="1020" cy="195" r="3" fill="#64748b"/>
+    <circle cx="1040" cy="195" r="3" fill="#22d3ee"/>
+    <circle cx="1060" cy="195" r="3" fill="#64748b"/>
+    <circle cx="1080" cy="195" r="3" fill="#64748b"/>
+    <circle cx="1100" cy="195" r="3" fill="#64748b"/>
+    <circle cx="1120" cy="195" r="3" fill="#64748b"/>
+  </g>
+  <g opacity="0.5">
+    <circle cx="860" cy="220" r="3" fill="#0ea5e9"/>
+    <circle cx="880" cy="220" r="3" fill="#64748b"/>
+    <circle cx="900" cy="220" r="3" fill="#64748b"/>
+    <circle cx="920" cy="220" r="3" fill="#64748b"/>
+    <circle cx="940" cy="220" r="3" fill="#64748b"/>
+    <circle cx="960" cy="220" r="3" fill="#64748b"/>
+    <circle cx="980" cy="220" r="3" fill="#64748b"/>
+    <circle cx="1000" cy="220" r="3" fill="#64748b"/>
+    <circle cx="1020" cy="220" r="3" fill="#0ea5e9"/>
+    <circle cx="1040" cy="220" r="3" fill="#64748b"/>
+    <circle cx="1060" cy="220" r="3" fill="#64748b"/>
+    <circle cx="1080" cy="220" r="3" fill="#64748b"/>
+    <circle cx="1100" cy="220" r="3" fill="#64748b"/>
+    <circle cx="1120" cy="220" r="3" fill="#22d3ee"/>
+  </g>
+  <g opacity="0.3">
+    <circle cx="860" cy="245" r="3" fill="#64748b"/>
+    <circle cx="880" cy="245" r="3" fill="#64748b"/>
+    <circle cx="900" cy="245" r="3" fill="#64748b"/>
+    <circle cx="920" cy="245" r="3" fill="#22d3ee"/>
+    <circle cx="940" cy="245" r="3" fill="#64748b"/>
+    <circle cx="960" cy="245" r="3" fill="#64748b"/>
+    <circle cx="980" cy="245" r="3" fill="#64748b"/>
+    <circle cx="1000" cy="245" r="3" fill="#64748b"/>
+    <circle cx="1020" cy="245" r="3" fill="#64748b"/>
+    <circle cx="1040" cy="245" r="3" fill="#64748b"/>
+    <circle cx="1060" cy="245" r="3" fill="#0ea5e9"/>
+    <circle cx="1080" cy="245" r="3" fill="#64748b"/>
+    <circle cx="1100" cy="245" r="3" fill="#64748b"/>
+    <circle cx="1120" cy="245" r="3" fill="#64748b"/>
+  </g>
+  <g opacity="0.2">
+    <circle cx="860" cy="270" r="3" fill="#64748b"/>
+    <circle cx="880" cy="270" r="3" fill="#64748b"/>
+    <circle cx="900" cy="270" r="3" fill="#64748b"/>
+    <circle cx="920" cy="270" r="3" fill="#64748b"/>
+    <circle cx="940" cy="270" r="3" fill="#64748b"/>
+    <circle cx="960" cy="270" r="3" fill="#64748b"/>
+    <circle cx="980" cy="270" r="3" fill="#0ea5e9"/>
+    <circle cx="1000" cy="270" r="3" fill="#64748b"/>
+    <circle cx="1020" cy="270" r="3" fill="#64748b"/>
+    <circle cx="1040" cy="270" r="3" fill="#64748b"/>
+    <circle cx="1060" cy="270" r="3" fill="#64748b"/>
+    <circle cx="1080" cy="270" r="3" fill="#64748b"/>
+    <circle cx="1100" cy="270" r="3" fill="#64748b"/>
+    <circle cx="1120" cy="270" r="3" fill="#64748b"/>
+  </g>
+  <g opacity="0.4">
+    <circle cx="860" cy="295" r="3" fill="#64748b"/>
+    <circle cx="880" cy="295" r="3" fill="#64748b"/>
+    <circle cx="900" cy="295" r="3" fill="#64748b"/>
+    <circle cx="920" cy="295" r="3" fill="#64748b"/>
+    <circle cx="940" cy="295" r="3" fill="#64748b"/>
+    <circle cx="960" cy="295" r="3" fill="#64748b"/>
+    <circle cx="980" cy="295" r="3" fill="#64748b"/>
+    <circle cx="1000" cy="295" r="3" fill="#22d3ee"/>
+    <circle cx="1020" cy="295" r="3" fill="#64748b"/>
+    <circle cx="1040" cy="295" r="3" fill="#64748b"/>
+    <circle cx="1060" cy="295" r="3" fill="#64748b"/>
+    <circle cx="1080" cy="295" r="3" fill="#0ea5e9"/>
+    <circle cx="1100" cy="295" r="3" fill="#64748b"/>
+    <circle cx="1120" cy="295" r="3" fill="#64748b"/>
+  </g>
+  <g opacity="0.25">
+    <circle cx="860" cy="320" r="3" fill="#64748b"/>
+    <circle cx="880" cy="320" r="3" fill="#64748b"/>
+    <circle cx="900" cy="320" r="3" fill="#0ea5e9"/>
+    <circle cx="920" cy="320" r="3" fill="#64748b"/>
+    <circle cx="940" cy="320" r="3" fill="#64748b"/>
+    <circle cx="960" cy="320" r="3" fill="#64748b"/>
+    <circle cx="980" cy="320" r="3" fill="#64748b"/>
+    <circle cx="1000" cy="320" r="3" fill="#64748b"/>
+    <circle cx="1020" cy="320" r="3" fill="#64748b"/>
+    <circle cx="1040" cy="320" r="3" fill="#64748b"/>
+    <circle cx="1060" cy="320" r="3" fill="#64748b"/>
+    <circle cx="1080" cy="320" r="3" fill="#64748b"/>
+    <circle cx="1100" cy="320" r="3" fill="#22d3ee"/>
+    <circle cx="1120" cy="320" r="3" fill="#64748b"/>
+  </g>
+
+  <!-- Embedding dimension indicator -->
+  <text x="990" y="350" text-anchor="middle" font-family="Inter, Helvetica, Arial, sans-serif" font-size="9" fill="#64748b">512 floating-point dimensions</text>
+  <text x="990" y="363" text-anchor="middle" font-family="Inter, Helvetica, Arial, sans-serif" font-size="9" fill="#64748b">L2-normalized · EdgeFace model</text>
+
+  <!-- ====== Right side: BACKEND SERVER ====== -->
+  <g filter="url(#shadow)">
+    <rect x="830" y="390" width="320" height="190" rx="14" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+  </g>
+  <text x="990" y="418" text-anchor="middle" font-family="Inter, Helvetica, Arial, sans-serif" font-size="11" font-weight="600" fill="#cbd5e1">Backend Server</text>
+  <line x1="860" y1="428" x2="1120" y2="428" stroke="#334155" stroke-width="0.5"/>
+
+  <!-- Arrow from vector to backend -->
+  <path d="M990 370 L990 380" fill="none" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowMuted)"/>
+
+  <!-- FastAPI box -->
+  <rect x="855" y="440" width="135" height="60" rx="8" fill="#0f172a" stroke="#0ea5e9" stroke-width="1"/>
+  <rect x="855" y="440" width="4" height="60" rx="2" fill="#0ea5e9"/>
+  <text x="920" y="460" text-anchor="middle" font-family="Inter, Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#f8fafc">FastAPI</text>
+  <text x="920" y="478" text-anchor="middle" font-family="Inter, Helvetica, Arial, sans-serif" font-size="9" fill="#94a3b8">REST API · Uvicorn</text>
+  <text x="920" y="492" text-anchor="middle" font-family="Inter, Helvetica, Arial, sans-serif" font-size="9" fill="#64748b">POST /api/face/query</text>
+
+  <!-- FAISS box -->
+  <rect x="1010" y="440" width="120" height="60" rx="8" fill="#0f172a" stroke="#22d3ee" stroke-width="1"/>
+  <rect x="1010" y="440" width="4" height="60" rx="2" fill="#22d3ee"/>
+  <text x="1070" y="460" text-anchor="middle" font-family="Inter, Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#f8fafc">FAISS</text>
+  <text x="1070" y="478" text-anchor="middle" font-family="Inter, Helvetica, Arial, sans-serif" font-size="9" fill="#94a3b8">IndexFlatIP</text>
+  <text x="1070" y="492" text-anchor="middle" font-family="Inter, Helvetica, Arial, sans-serif" font-size="9" fill="#64748b">512D inner product</text>
+
+  <!-- Arrow between FastAPI and FAISS -->
+  <line x1="990" y1="470" x2="1005" y2="470" stroke="#64748b" stroke-width="1" marker-end="url(#arrowMuted)"/>
+
+  <!-- Session DB row -->
+  <rect x="855" y="512" width="275" height="50" rx="8" fill="#0f172a" stroke="#334155" stroke-width="1"/>
+  <ellipse cx="878" cy="534" rx="8" ry="4" fill="none" stroke="#0ea5e9" stroke-width="1.5"/>
+  <path d="M870 534 L870 544" fill="none" stroke="#0ea5e9" stroke-width="1.5"/>
+  <path d="M886 534 L886 544" fill="none" stroke="#0ea5e9" stroke-width="1.5"/>
+  <ellipse cx="878" cy="544" rx="8" ry="4" fill="none" stroke="#0ea5e9" stroke-width="1.5"/>
+  <path d="M870 544 L870 554" fill="none" stroke="#0ea5e9" stroke-width="1.5"/>
+  <path d="M886 544 L886 554" fill="none" stroke="#0ea5e9" stroke-width="1.5"/>
+  <ellipse cx="878" cy="554" rx="8" ry="4" fill="#0ea5e9" opacity="0.15"/>
+  <text x="902" y="538" font-family="Inter, Helvetica, Arial, sans-serif" font-size="11" font-weight="500" fill="#f8fafc">Session Persistence</text>
+  <text x="902" y="554" font-family="Inter, Helvetica, Arial, sans-serif" font-size="9" fill="#64748b">faiss.index · metadata.json · sessions/&lt;uuid&gt;/</text>
+
+  <!-- ====== Bottom: TECH STACK BADGES ====== -->
+  <g filter="url(#shadow)">
+    <rect x="50" y="693" width="1100" height="50" rx="12" fill="#1e293b" stroke="#334155" stroke-width="1"/>
+  </g>
+
+  <!-- Divider dots -->
+  <circle cx="215" cy="718" r="2" fill="#334155"/>
+  <circle cx="395" cy="718" r="2" fill="#334155"/>
+  <circle cx="575" cy="718" r="2" fill="#334155"/>
+  <circle cx="755" cy="718" r="2" fill="#334155"/>
+  <circle cx="935" cy="718" r="2" fill="#334155"/>
+
+  <!-- Badge function -->
+  <g>
+    <rect x="82" y="703" width="115" height="30" rx="6" fill="#0f172a" stroke="#0ea5e9" stroke-width="1"/>
+    <text x="140" y="723" text-anchor="middle" font-family="Inter, Helvetica, Arial, sans-serif" font-size="11" font-weight="600" fill="#0ea5e9">ONNX Web</text>
+  </g>
+  <g>
+    <rect x="232" y="703" width="75" height="30" rx="6" fill="#0f172a" stroke="#22d3ee" stroke-width="1"/>
+    <text x="270" y="723" text-anchor="middle" font-family="Inter, Helvetica, Arial, sans-serif" font-size="11" font-weight="600" fill="#22d3ee">YOLO</text>
+  </g>
+  <g>
+    <rect x="325" y="703" width="100" height="30" rx="6" fill="#0f172a" stroke="#0ea5e9" stroke-width="1"/>
+    <text x="375" y="723" text-anchor="middle" font-family="Inter, Helvetica, Arial, sans-serif" font-size="11" font-weight="600" fill="#0ea5e9">EdgeFace</text>
+  </g>
+  <g>
+    <rect x="443" y="703" width="105" height="30" rx="6" fill="#0f172a" stroke="#22d3ee" stroke-width="1"/>
+    <text x="495" y="723" text-anchor="middle" font-family="Inter, Helvetica, Arial, sans-serif" font-size="11" font-weight="600" fill="#22d3ee">IOU Tracker</text>
+  </g>
+  <g>
+    <rect x="566" y="703" width="80" height="30" rx="6" fill="#0f172a" stroke="#0ea5e9" stroke-width="1"/>
+    <text x="606" y="723" text-anchor="middle" font-family="Inter, Helvetica, Arial, sans-serif" font-size="11" font-weight="600" fill="#0ea5e9">WebGPU</text>
+  </g>
+  <g>
+    <rect x="665" y="703" width="95" height="30" rx="6" fill="#0f172a" stroke="#22d3ee" stroke-width="1"/>
+    <text x="712" y="723" text-anchor="middle" font-family="Inter, Helvetica, Arial, sans-serif" font-size="11" font-weight="600" fill="#22d3ee">FastAPI</text>
+  </g>
+  <g>
+    <rect x="778" y="703" width="70" height="30" rx="6" fill="#0f172a" stroke="#0ea5e9" stroke-width="1"/>
+    <text x="813" y="723" text-anchor="middle" font-family="Inter, Helvetica, Arial, sans-serif" font-size="11" font-weight="600" fill="#0ea5e9">FAISS</text>
+  </g>
+  <g>
+    <rect x="866" y="703" width="115" height="30" rx="6" fill="#0f172a" stroke="#22d3ee" stroke-width="1"/>
+    <text x="923" y="723" text-anchor="middle" font-family="Inter, Helvetica, Arial, sans-serif" font-size="11" font-weight="600" fill="#22d3ee">JavaScript</text>
+  </g>
+  <g>
+    <rect x="999" y="703" width="75" height="30" rx="6" fill="#0f172a" stroke="#0ea5e9" stroke-width="1"/>
+    <text x="1036" y="723" text-anchor="middle" font-family="Inter, Helvetica, Arial, sans-serif" font-size="11" font-weight="600" fill="#0ea5e9">Python</text>
+  </g>
+  <g>
+    <rect x="1091" y="703" width="42" height="30" rx="6" fill="#0f172a" stroke="#64748b" stroke-width="1"/>
+    <text x="1112" y="723" text-anchor="middle" font-family="Inter, Helvetica, Arial, sans-serif" font-size="11" font-weight="600" fill="#64748b">…</text>
+  </g>
+</svg>

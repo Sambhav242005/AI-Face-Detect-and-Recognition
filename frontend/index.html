@@ -28,6 +28,7 @@
                 <button id="btnNewSession" class="btn primary">New Session</button>
                 <button id="btnLoadSession" class="btn outline">Load Session</button>
                 <button id="btnDeleteSession" class="btn outline danger">Delete Session</button>
+                <button id="btnToggleSessionList" class="btn outline">Sessions</button>
                 <button id="btnPauseTracking" class="btn outline pause">Pause</button>
                 <button id="btnUploadImageTrigger" class="btn outline primary">Identify Photo</button>
                 <input type="file" id="imageUpload" accept="image/*" style="display: none;">
@@ -84,7 +85,15 @@
                         <button id="btnUseClosest" class="btn outline icon-btn" title="Use closest face ReID">⊙</button>
                         <input type="text" id="nameInput" placeholder="Enter new name...">
                     </div>
-                    <button id="btnUpdateName" class="btn primary full-width">Update Name</button>
+                    <div class="reid-actions">
+                        <button id="btnUpdateName" class="btn primary full-width">Update Name</button>
+                        <button id="btnDeleteIdentity" class="btn outline danger full-width">Delete Identity</button>
+                    </div>
+                </div>
+
+                <div id="sessionListPanel" class="session-list-panel hidden">
+                    <h3>Saved Sessions</h3>
+                    <div id="sessionList" class="session-list"></div>
                 </div>
 
                 <div class="debug-card">

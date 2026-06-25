@@ -1,5 +1,8 @@
 import asyncio
+import re
 import threading
+import time
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -10,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from download_models import ensure_models_exist
 from session_db import SessionDBManager
@@ -34,6 +38,9 @@ NEW_IDENTITY_MAX_SIM = 0.40
 PROFILE_EXPANSION_MIN_SIM = 0.70
 PROFILE_EXPANSION_MAX_SIM = 0.85
 
+NAME_MAX_LENGTH = 64
+NAME_REGEX = re.compile(r"^[\w\s.\-']+$")
+
 _session_cache: dict[str, SessionDBManager] = {}
 _session_cache_lock = threading.Lock()
 
@@ -43,6 +50,17 @@ def _normalize_model_name(model_name: Optional[str]) -> str:
     if model_name not in ALLOWED_MODEL_NAMES:
         raise HTTPException(status_code=400, detail=f"Unsupported model_name: {model_name}")
     return model_name
+
+
+def _validate_name(name: str) -> str:
+    clean = str(name).strip()
+    if not clean:
+        raise HTTPException(status_code=400, detail="name is required")
+    if len(clean) > NAME_MAX_LENGTH:
+        raise HTTPException(status_code=400, detail=f"name must be {NAME_MAX_LENGTH} characters or fewer")
+    if not NAME_REGEX.match(clean):
+        raise HTTPException(status_code=400, detail="name contains invalid characters")
+    return clean
 
 
 def _cache_session(manager: SessionDBManager) -> None:
@@ -127,9 +145,41 @@ def _face_response(
     }
 
 
+# ─── Rate Limiting ──────────────────────────────────────────────────────────
+
+_rate_limit_store: dict[str, list[float]] = defaultdict(list)
+RATE_LIMIT_WINDOW = 60.0
+RATE_LIMIT_MAX_REQUESTS = 120
+
+
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if request.url.path.startswith("/api/"):
+            client_ip = request.client.host if request.client else "unknown"
+            now = time.time()
+            window = _rate_limit_store[client_ip]
+            cutoff = now - RATE_LIMIT_WINDOW
+            while window and window[0] < cutoff:
+                window.pop(0)
+            if len(window) >= RATE_LIMIT_MAX_REQUESTS:
+                return JSONResponse(
+                    status_code=429,
+                    content={"detail": "Too many requests. Please slow down."},
+                )
+            window.append(now)
+        return await call_next(request)
+
+
 async def periodic_cleanup():
     while True:
         cleanup_old_session_files(days=3.0)
+        # Also flush stale rate-limit entries
+        now = time.time()
+        cutoff = now - RATE_LIMIT_WINDOW
+        for ip in list(_rate_limit_store.keys()):
+            _rate_limit_store[ip] = [t for t in _rate_limit_store[ip] if t >= cutoff]
+            if not _rate_limit_store[ip]:
+                del _rate_limit_store[ip]
         await asyncio.sleep(43200)
 
 
@@ -158,10 +208,15 @@ class CrossOriginIsolationMiddleware(BaseHTTPMiddleware):
         return response
 
 
+app.add_middleware(RateLimitMiddleware)
 app.add_middleware(CrossOriginIsolationMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        "http://localhost:3000",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -173,6 +228,9 @@ async def health_check():
     return {"status": "ok"}
 
 
+# ─── Session Endpoints ─────────────────────────────────────────────────────
+
+
 @app.get("/api/session/new")
 async def new_session(model_name: str = DEFAULT_MODEL_NAME):
     model_name = _normalize_model_name(model_name)
@@ -182,13 +240,53 @@ async def new_session(model_name: str = DEFAULT_MODEL_NAME):
     return {"status": "success", "session_id": session_id, "model_name": model_name}
 
 
+@app.get("/api/session/list")
+async def list_sessions():
+    """List all saved sessions with basic metadata."""
+    if not SESSION_DIR.exists():
+        return {"status": "success", "sessions": []}
+
+    sessions = []
+    for entry in sorted(SESSION_DIR.iterdir()):
+        if not entry.is_dir():
+            continue
+        meta_path = entry / "metadata.json"
+        if not meta_path.exists():
+            continue
+        try:
+            import json
+            with open(meta_path) as f:
+                meta = json.load(f)
+            sessions.append({
+                "session_id": entry.name,
+                "model_name": meta.get("model_name", "unknown"),
+                "embedding_count": len(meta.get("metadata", [])),
+            })
+        except Exception:
+            sessions.append({
+                "session_id": entry.name,
+                "model_name": "unknown",
+                "embedding_count": 0,
+            })
+
+    return {"status": "success", "sessions": sessions}
+
+
 @app.get("/api/session/load/{session_id}")
 async def load_session(session_id: str, model_name: Optional[str] = None):
     manager = get_session_manager(session_id, model_name=model_name)
+
+    face_count = 0
+    if manager.index is not None:
+        face_count = manager.index.ntotal
+    unique_reids = len(set(m["reid_num"] for m in manager.metadata))
+
     return {
         "status": "success",
         "session_id": manager.active_session_id,
         "model_name": manager.model_name,
+        "face_count": face_count,
+        "unique_identities": unique_reids,
     }
 
 
@@ -200,6 +298,9 @@ async def delete_session(session_id: str):
         manager = SessionDBManager(base_dir=str(SESSION_DIR))
     success = manager.delete_session(session_id)
     return {"status": "success" if success else "error"}
+
+
+# ─── Face Endpoints ────────────────────────────────────────────────────────
 
 
 @app.post("/api/face/query")
@@ -246,6 +347,9 @@ async def query_face(data: dict):
 
             # Break tracker lock if the database confidently says it is someone else.
             if best_reid is not None and best_reid != known_reid and similarity >= TRACKER_OVERRIDE_THRESHOLD:
+                # When overriding, also learn the new embedding for the matched identity
+                if allow_profile_expansion:
+                    manager.expand_face(best_reid, embedding, best_name)
                 print(f"TRACKER OVERRIDE! Track {track_id} swapped from {known_reid} to {best_reid}")
                 return _face_response(manager, best_reid, best_name, similarity, matched=True, override=True)
 
@@ -284,9 +388,7 @@ async def update_face(data: dict):
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail="reid must be an integer") from exc
 
-    clean_name = str(name).strip()
-    if not clean_name:
-        raise HTTPException(status_code=400, detail="name is required")
+    clean_name = _validate_name(name)
 
     manager = get_session_manager(session_id, model_name=model_name)
     if manager.update_name(reid_num, clean_name):
@@ -297,6 +399,51 @@ async def update_face(data: dict):
         }
 
     raise HTTPException(status_code=404, detail=f"ReID not found: {reid}")
+
+
+@app.delete("/api/face/{session_id}/{reid}")
+async def delete_face(session_id: str, reid: str):
+    """Delete a specific identity (ReID) from a session."""
+    reid_num = _coerce_reid(reid)
+    if reid_num is None:
+        raise HTTPException(status_code=400, detail="reid must be an integer")
+
+    manager = get_session_manager(session_id)
+    if not manager.has_reid(reid_num):
+        raise HTTPException(status_code=404, detail=f"ReID not found: {reid}")
+
+    manager.delete_face(reid_num)
+    return {"status": "success", "session_id": session_id, "reid": reid_num}
+
+
+@app.post("/api/face/merge")
+async def merge_faces(data: dict):
+    """Merge one identity into another (all embeddings reassigned)."""
+    session_id = data.get("session_id")
+    merge_from = _coerce_reid(data.get("merge_from"))
+    merge_to = _coerce_reid(data.get("merge_to"))
+
+    if merge_from is None or merge_to is None:
+        raise HTTPException(status_code=400, detail="merge_from and merge_to are required integers")
+    if merge_from == merge_to:
+        raise HTTPException(status_code=400, detail="Cannot merge an identity into itself")
+
+    manager = get_session_manager(session_id)
+    if not manager.has_reid(merge_from):
+        raise HTTPException(status_code=404, detail=f"Source ReID not found: {merge_from}")
+    if not manager.has_reid(merge_to):
+        raise HTTPException(status_code=404, detail=f"Target ReID not found: {merge_to}")
+
+    success = manager.merge_faces(merge_from, merge_to)
+    if not success:
+        raise HTTPException(status_code=500, detail="Merge failed")
+
+    return {
+        "status": "success",
+        "session_id": session_id,
+        "merge_from": merge_from,
+        "merge_to": merge_to,
+    }
 
 
 app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")

@@ -245,6 +245,43 @@ class SessionDBManager:
                     return m["name"]
             return f"Person_{reid_num}"
 
+    def delete_face(self, reid_num: int) -> bool:
+        """Remove all embeddings for a given ReID from the index and metadata."""
+        with self._lock:
+            if self.index is None or self.index.ntotal == 0:
+                return False
+
+            # Find all metadata entries and their indices for this reid
+            to_remove = []
+            kept_metadata = []
+            for i, m in enumerate(self.metadata):
+                if m["reid_num"] == reid_num:
+                    to_remove.append(i)
+                else:
+                    kept_metadata.append(m)
+
+            if not to_remove:
+                return False
+
+            # FAISS doesn't support removing individual vectors from IndexFlatIP.
+            # Rebuild the index without the removed entries.
+            kept_embeddings = []
+            for i in range(self.index.ntotal):
+                if i not in to_remove:
+                    vec = self.index.reconstruct(i)
+                    kept_embeddings.append(vec)
+
+            self.metadata = kept_metadata
+            self.reid_name_map = {m["key"]: m["name"] for m in kept_metadata}
+
+            self.index = faiss.IndexFlatIP(self.EMBED_DIM)
+            if kept_embeddings:
+                self.index.add(np.vstack(kept_embeddings))
+
+            self._save_session()
+            print(f"Deleted face reid={reid_num} ({len(to_remove)} embeddings removed)")
+            return True
+
     def expand_face(self, reid_num: int, embedding, name: str):
         """Add a new embedding variant for an existing identity if it's sufficiently novel."""
         with self._lock:
