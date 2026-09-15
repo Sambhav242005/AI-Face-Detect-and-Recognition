@@ -2,6 +2,8 @@
 
 A client-side AI face tracking and recognition application leveraging WebGPU and ONNX runtime to run models in the browser.
 
+**Live demo:** https://ai-face.sambhav-surana.online/
+
 > **⚠ WARNING: RESEARCH PROJECT**
 > This project is a **hackable, experimental research project** meant to explore capabilities of running AI in the browser via WebGPU. It is **NOT** intended for production security, access control, or sensitive environments. The architecture involves sending cropped images and raw embeddings over HTTP, and running client-side tracking, meaning the data pipeline is fully visible and manipulable by the end-user. Please use responsibly.
 
