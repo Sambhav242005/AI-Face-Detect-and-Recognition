@@ -740,6 +740,12 @@ function updateSidePanel() {
 // ─── Camera ────────────────────────────────────────────────────────────────
 
 async function initCamera() {
+    if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
+        throw new Error(
+            `Camera unavailable: browsers expose the webcam only on HTTPS or localhost (this page is ${window.location.origin}). ` +
+            `Serve over HTTPS, or relaunch Chrome with --unsafely-treat-insecure-origin-as-secure=${window.location.origin}`
+        );
+    }
     const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: false });
     DOM.webcam.srcObject = stream;
     DOM.webcam.style.display = 'none';
