@@ -2,12 +2,22 @@
 Export YOLO face model to ONNX and download all EdgeFace ONNX models for browser-side WebGPU inference.
 Uses akanametov/yolo-face models: https://github.com/akanametov/yolo-face
 Uses otroshi/edgeface models: https://github.com/otroshi/edgeface
+
+PC-only script: needs requirements-models.txt (torch/ultralytics).
+Never runs inside the Pi/Docker runtime image (no torch there by design).
+Re-runs are cheap: existing frontend/models/*.onnx are skipped unless --force.
 """
+import argparse
 import os
+import sys
 import urllib.request
 
 FRONTEND_MODELS_DIR = os.path.join("frontend", "models")
 os.makedirs(FRONTEND_MODELS_DIR, exist_ok=True)
+
+parser = argparse.ArgumentParser(description="Export YOLO + EdgeFace ONNX models (PC-only).")
+parser.add_argument("--force", action="store_true", help="Re-export even when .onnx already exists.")
+args = parser.parse_args()
 
 # ─── 1. Download real YOLO face model and export to ONNX ────────────────────
 print("=" * 60)
@@ -31,28 +41,36 @@ if not os.path.exists(yolo_pt):
 else:
     print(f"Face model already exists at {yolo_pt}")
 
-# Export to ONNX (always re-export to ensure correctness)
-from ultralytics import YOLO
-model = YOLO(yolo_pt)
-print(f"Model classes: {model.names}")
-exported_path = model.export(format="onnx", imgsz=640, simplify=True, opset=17)
-
-if os.path.exists(exported_path):
-    # Move to frontend/models
-    if os.path.exists(yolo_onnx_dest):
-        os.remove(yolo_onnx_dest)
-    os.rename(exported_path, yolo_onnx_dest)
-    print(f"Exported YOLO face ONNX to {yolo_onnx_dest}")
+# Export to ONNX (skip when artifact already exists unless --force).
+if os.path.exists(yolo_onnx_dest) and not args.force:
+    print(f"YOLO ONNX already exists at {yolo_onnx_dest}, skipping export.")
 else:
-    print(f"ERROR: Expected export at {exported_path} not found!")
+    try:
+        from ultralytics import YOLO
+    except ModuleNotFoundError:
+        print("ERROR: 'ultralytics' not installed. Run:")
+        print("  python -m pip install -r requirements-models.txt")
+        print("Then rerun: python export_onnx.py")
+        sys.exit(1)
+    model = YOLO(yolo_pt)
+    print(f"Model classes: {model.names}")
+    exported_path = model.export(format="onnx", imgsz=640, simplify=True, opset=17)
+
+    if os.path.exists(exported_path):
+        # Move to frontend/models
+        if os.path.exists(yolo_onnx_dest):
+            os.remove(yolo_onnx_dest)
+        os.rename(exported_path, yolo_onnx_dest)
+        print(f"Exported YOLO face ONNX to {yolo_onnx_dest}")
+    else:
+        print(f"ERROR: Expected export at {exported_path} not found!")
+        sys.exit(1)
 
 # ─── 2. Download & export all EdgeFace models to ONNX ───────────────────────
 print()
 print("=" * 60)
 print("Step 2: Downloading & exporting all EdgeFace models to ONNX...")
 print("=" * 60)
-
-import torch
 
 EDGEFACE_MODELS = [
     "edgeface_base",
@@ -61,10 +79,24 @@ EDGEFACE_MODELS = [
     "edgeface_xxs",
 ]
 
+needs_edgeface = args.force or any(
+    not os.path.exists(os.path.join(FRONTEND_MODELS_DIR, f"{m}.onnx")) for m in EDGEFACE_MODELS
+)
+if not needs_edgeface:
+    print("All EdgeFace ONNX models present, skipping torch export.")
+else:
+    try:
+        import torch
+    except ModuleNotFoundError:
+        print("ERROR: 'torch' not installed. Run:")
+        print("  python -m pip install -r requirements-models.txt")
+        print("Then rerun: python export_onnx.py")
+        sys.exit(1)
+
 for model_name in EDGEFACE_MODELS:
     onnx_dest = os.path.join(FRONTEND_MODELS_DIR, f"{model_name}.onnx")
     
-    if os.path.exists(onnx_dest):
+    if os.path.exists(onnx_dest) and not args.force:
         print(f"  [{model_name}] Already exists at {onnx_dest}, skipping.")
         continue
     

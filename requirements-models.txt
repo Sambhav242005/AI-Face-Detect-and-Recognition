@@ -1,7 +1,10 @@
---extra-index-url https://download.pytorch.org/whl/cu124
-torch==2.6.0+cu124
-torchvision==0.21.0+cu124
-torchaudio==2.6.0+cu124
+# PC-only model export deps (torch/ultralytics). NEVER installed in Docker/Pi runtime.
+# Default is CPU wheels (works on x86 + ARM/Pi for export prep). For CUDA export
+# on an NVIDIA PC, instead use: pip install torch torchvision torchaudio
+# --index-url https://download.pytorch.org/whl/cu124
+torch
+torchvision
+torchaudio
 ultralytics
 onnx
 onnxslim

@@ -59,16 +59,37 @@ The ONNX models (YOLO and EdgeFace) are compiled locally. The application will a
 
 4. Open your browser and navigate to `http://localhost:8000`.
 
-### 3. Running via Docker
+### 3. Running via Docker (incl. Raspberry Pi)
 
-You can easily spin up the environment using Docker:
+Runtime image is slim: FastAPI + FAISS only. No torch/ultralytics inside
+(browser runs WebGPU inference). ONNX files must be baked or mounted.
 
 ```bash
 docker build -t face-ai-webgpu .
 docker run -p 8000:8000 face-ai-webgpu
 ```
 
-The Docker image installs both runtime and model-generation dependencies so it can build missing ONNX files during startup.
+Pi flow (export on PC first, models ~110 MB, git-ignored):
+
+```bash
+# On a PC:
+pip install -r requirements-models.txt
+python export_onnx.py
+# Copy frontend/models/*.onnx to the Pi (scp/rsync/USB), then build/run there.
+# Or mount at runtime without rebuilding:
+docker run -p 8000:8000 \
+  -v ./frontend/models:/app/frontend/models:ro \
+  -v face-sessions:/app/backend/sessions \
+  face-ai-webgpu
+```
+
+Notes:
+- Container sets `SKIP_MODEL_EXPORT=1`, so startup never runs torch export.
+  Missing models = warning only; `/api/health` stays green, browser shows
+  which `.onnx` is absent.
+- If you built an old image that installed `torch==...+cu124`/ultralytics,
+  rebuild with `--no-cache` once; that layer is gone.
+- Your old `-p 8100:8000` mapping is fine too, then open `http://<pi>:8100`.
 
 ## Note on Repository Structure (Archive Folder)
 

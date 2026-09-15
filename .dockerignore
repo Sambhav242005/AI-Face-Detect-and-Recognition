@@ -9,4 +9,7 @@ test_video.mp4
 *.pt
 .DS_Store
 backend/sessions/
+sessions/
+frontend/models/.cache/
+.serena/
 
