@@ -9,7 +9,7 @@ A client-side AI face tracking and recognition application leveraging WebGPU and
 
 ## Features
 
-- **Browser-based AI**: Runs YOLOv8 face detection and EdgeFace face embeddings directly in the browser via WebGPU/WASM ONNX Runtime.
+- **Browser-based AI**: Runs YOLOv11-face detection and EdgeFace face embeddings directly in the browser via WebGPU/WASM ONNX Runtime.
 - **FastAPI Backend**: A lightweight Python backend that acts purely as an API server for the FAISS session database and JSON metadata.
 - **Session Management**: Session persistence and deletion capabilities.
 - **Pause/Resume Tracking**: Pause live recognition without unloading the camera, models, or active session.
@@ -91,7 +91,7 @@ Notes:
   which `.onnx` is absent.
 - If you built an old image that installed `torch==...+cu124`/ultralytics,
   rebuild with `--no-cache` once; that layer is gone.
-- Your old `-p 8100:8000` mapping is fine too, then open `http://<pi>:8100`.
+- Your old `-p 8100:8000` mapping is fine too, then open `http://<localhost>:8100`.
 
 ## Note on Repository Structure (Archive Folder)
 
